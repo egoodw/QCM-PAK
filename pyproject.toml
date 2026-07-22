@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qcm-pak"
+dynamic = ["version"]
+description = "QCM data analysis for ALD and ALE experiments"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Eden Goodwin", email = "edengoodwin.carleton@gmail.com" }]
+keywords = ["QCM", "ALD", "ALE", "quartz crystal microbalance", "thin films", "adsorption"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+]
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.8",
+    "pandas>=1.4",
+    "matplotlib>=3.5",
+    "lmfit>=1.2",
+]
+
+[project.optional-dependencies]
+pelt = ["ruptures>=1.1"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "ruptures>=1.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/egoodw/QCM-PAK"
+"Bug Tracker" = "https://github.com/egoodw/QCM-PAK/issues"
+
+[tool.hatch.version]
+path = "src/qcm_pak/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qcm_pak"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "ANN"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=qcm_pak --cov-report=term-missing"
