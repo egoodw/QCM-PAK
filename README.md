@@ -14,12 +14,6 @@ Python package for QCM (Quartz Crystal Microbalance) data analysis in ALD and AL
 ## Installation
 
 ```bash
-pip install qcm-pak
-```
-
-Or from source:
-
-```bash
 git clone https://github.com/egoodw/QCM-PAK.git
 cd QCM-PAK
 pip install -e ".[dev]"
