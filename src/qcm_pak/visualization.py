@@ -1,8 +1,18 @@
 """
 Matplotlib-based visualizations for QCM analysis results.
 
-All functions return a :class:`matplotlib.figure.Figure` and do not call
-``plt.show()`` — the caller decides whether to display or save.
+All functions build a :class:`matplotlib.figure.Figure` directly via the
+object-oriented API (``Figure(...)`` + ``fig.subplots(...)``) rather than
+``pyplot.subplots()``. This deliberately avoids pyplot's global figure
+registry: a figure built this way is never tracked by pyplot, so nothing
+leaks and there's nothing to ``plt.close()``. That matters when this module
+runs inside a long-lived, concurrent service (e.g. an HTTP API handling many
+requests) rather than a one-shot script — pyplot's global state is not
+meant to be shared across threads/requests, and figures registered with it
+but never closed accumulate for the life of the process.
+
+No function calls ``plt.show()`` — the caller decides whether to display or
+save the returned Figure.
 
 Public API:
 
@@ -11,11 +21,15 @@ Public API:
 - :func:`plot_langmuir` — Langmuir kinetics fit
 - :func:`plot_etch` — etch kinetics fit
 - :func:`plot_derivative` — smoothed first derivative of the mass signal
+- :func:`fig_to_png_bytes` — render a Figure to PNG bytes without touching disk
 """
 
 from __future__ import annotations
 
+import io
+
 import numpy as np
+from matplotlib import colormaps
 from matplotlib.figure import Figure
 
 from qcm_pak._types import (
@@ -25,6 +39,27 @@ from qcm_pak._types import (
     LangmuirResult,
     MassDataset,
 )
+
+
+def fig_to_png_bytes(fig: Figure, dpi: int = 150) -> bytes:
+    """Render a Figure to PNG bytes without touching disk.
+
+    Parameters
+    ----------
+    fig:
+        Figure to render, typically returned by one of this module's
+        ``plot_*`` functions.
+    dpi:
+        Resolution in dots per inch.
+
+    Returns
+    -------
+    bytes
+        PNG image data.
+    """
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    return buf.getvalue()
 
 
 def plot_trace(
@@ -44,14 +79,14 @@ def plot_trace(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig = Figure(figsize=(12, 4))
+    ax = fig.subplots()
     ax.plot(data.time / 60.0, data.mass, lw=0.8, color="steelblue", label="Mass")
 
     if index is not None:
         unique_names = list(dict.fromkeys(n for n, _ in index.step_onsets))
-        colors = plt.cm.tab10(np.linspace(0, 0.9, max(1, len(unique_names))))  # type: ignore[attr-defined]
+        cmap = colormaps["tab10"]
+        colors = cmap(np.linspace(0, 0.9, max(1, len(unique_names))))
         color_map = dict(zip(unique_names, colors))
 
         first_seen: set[str] = set()
@@ -97,16 +132,16 @@ def plot_cycles(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     if step is not None:
         step_names = [step]
     else:
         step_names = cycles.recipe.step_names()
 
     n = len(step_names)
-    fig, axes = plt.subplots(1, n, figsize=(6 * n, 4), squeeze=False)
+    fig = Figure(figsize=(6 * n, 4))
+    axes = fig.subplots(1, n, squeeze=False)
 
+    cmap = colormaps["viridis"]
     for col, name in enumerate(step_names):
         ax = axes[0, col]
         step_results = cycles.steps(name=name)
@@ -114,7 +149,7 @@ def plot_cycles(
             ax.set_title(f"{name} (no data)")
             continue
         n_traces = len(step_results)
-        colors = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, n_traces)))  # type: ignore[attr-defined]
+        colors = cmap(np.linspace(0.1, 0.9, max(1, n_traces)))
         for i, sr in enumerate(step_results):
             ax.plot(
                 sr.time,
@@ -149,8 +184,6 @@ def plot_langmuir(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     step_results = cycles.steps(name=result.step_name)
     min_len = min(len(s.mass_corrected) for s in step_results)
     t_exp = step_results[0].time[:min_len]
@@ -176,7 +209,8 @@ def plot_langmuir(
             f"θ₂={result.theta2:.2f}, k₂={result.k2:.4f} s⁻¹  R²={result.r_squared:.4f}"  # type: ignore[operator]
         )
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     ax.plot(t_exp, theta_exp, lw=0.8, color="steelblue", alpha=0.7, label="Avg data")
     ax.plot(t_fit, theta_fit, lw=1.5, color="tomato", label=label)
     ax.set_xlabel("Pulse time (s)")
@@ -204,8 +238,6 @@ def plot_etch(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     step_results = cycles.steps(name=result.step_name)
     min_len = min(len(s.mass_corrected) for s in step_results)
     t_exp = step_results[0].time[:min_len]
@@ -225,7 +257,8 @@ def plot_etch(
         etch_fit = result.rate * t_fit  # type: ignore[operator]
         label = f"Linear: rate={result.rate:.4f} ng/cm²/s  R²={result.r_squared:.4f}"  # type: ignore[operator]
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     ax.plot(t_exp, etch_exp, lw=0.8, color="steelblue", alpha=0.7, label="Avg data")
     ax.plot(t_fit, etch_fit, lw=1.5, color="tomato", label=label)
     ax.set_xlabel("Pulse time (s)")
@@ -251,7 +284,6 @@ def plot_derivative(data: MassDataset) -> Figure:
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
     from scipy.signal import savgol_filter
 
     dt = data.dt
@@ -263,7 +295,8 @@ def plot_derivative(data: MassDataset) -> Figure:
     smooth = savgol_filter(mass, window_length=win, polyorder=poly)
     deriv = np.gradient(smooth, dt)
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    fig = Figure(figsize=(12, 6))
+    axes = fig.subplots(2, 1, sharex=True)
     axes[0].plot(data.time / 60.0, mass, lw=0.6, color="steelblue")
     axes[0].set_ylabel("Δm (ng/cm²)")
     axes[0].set_title("Mass trace")

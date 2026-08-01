@@ -20,9 +20,10 @@ Time mode summary
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,7 @@ from numpy.typing import NDArray
 
 from qcm_pak._types import QCMDataset
 from qcm_pak.exceptions import DataLoadError
+from qcm_pak.serialization import known_fields, to_jsonable
 
 _FREQ_FACTORS: dict[str, float] = {
     "Hz": 1.0,
@@ -121,6 +123,15 @@ class ColumnSpec:
             raise ValueError(f"header_rows must be >= 0, got {self.header_rows}")
         if self.skiprows < 0:
             raise ValueError(f"skiprows must be >= 0, got {self.skiprows}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ColumnSpec:
+        """Reconstruct a ColumnSpec from a dict produced by :meth:`to_dict`."""
+        return cls(**known_fields(cls, data))
 
 
 def load_data(path: str | Path, spec: ColumnSpec) -> QCMDataset:

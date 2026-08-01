@@ -10,14 +10,16 @@ Three dataclasses cover all user-facing configuration:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 
 from qcm_pak.exceptions import DataLoadError
 from qcm_pak.recipe import Recipe
+from qcm_pak.serialization import known_fields, to_jsonable
 
 
 @dataclass
@@ -41,6 +43,18 @@ class ALDParameters:
         self.input_file = Path(self.input_file)
         if not self.input_file.exists():
             raise DataLoadError(f"Input file not found: {self.input_file}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ALDParameters:
+        """Reconstruct ALDParameters from a dict produced by :meth:`to_dict`."""
+        return cls(
+            input_file=data["input_file"],
+            recipe=Recipe.from_dict(data["recipe"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -80,6 +94,15 @@ class SauerbreyConstants:
             2.0 * self.fundamental_frequency**2 * self.overtone
         )
         return -C * 1e9   # g/cm² → ng/cm²
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SauerbreyConstants:
+        """Reconstruct from a dict produced by :meth:`to_dict`."""
+        return cls(**known_fields(cls, data))
 
 
 @dataclass
@@ -154,3 +177,12 @@ class DetectionParameters:
             raise ValueError(
                 f"min_pulse_spacing must be >= 1, got {self.min_pulse_spacing}"
             )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DetectionParameters:
+        """Reconstruct from a dict produced by :meth:`to_dict`."""
+        return cls(**known_fields(cls, data))
