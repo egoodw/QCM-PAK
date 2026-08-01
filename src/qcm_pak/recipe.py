@@ -51,8 +51,11 @@ ALE with two loss steps::
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
+
+from qcm_pak.serialization import known_fields, to_jsonable
 
 
 @dataclass
@@ -93,6 +96,15 @@ class PulseStep:
         """Total step duration (pulse + purge) in seconds."""
         return self.pulse + self.purge
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> PulseStep:
+        """Reconstruct a PulseStep from a dict produced by :meth:`to_dict`."""
+        return cls(**known_fields(cls, data))
+
 
 @dataclass
 class SubCycle:
@@ -127,6 +139,19 @@ class SubCycle:
     def total_duration(self) -> float:
         """Total duration of all repeats of this SubCycle in seconds."""
         return self.duration * self.repeats
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SubCycle:
+        """Reconstruct a SubCycle from a dict produced by :meth:`to_dict`."""
+        return cls(
+            steps=[PulseStep.from_dict(s) for s in data["steps"]],
+            repeats=data.get("repeats", 1),
+            label=data.get("label", ""),
+        )
 
 
 @dataclass
@@ -192,3 +217,16 @@ class Recipe:
                 if s.name not in seen:
                     seen.append(s.name)
         return seen
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Recipe:
+        """Reconstruct a Recipe from a dict produced by :meth:`to_dict`."""
+        return cls(
+            sub_cycles=[SubCycle.from_dict(sc) for sc in data["sub_cycles"]],
+            repeats=data.get("repeats", 1),
+            start_time=data.get("start_time", 0.0),
+        )

@@ -20,6 +20,7 @@ from qcm_pak._types import (  # noqa: E402
 )
 from qcm_pak.recipe import PulseStep, Recipe, SubCycle  # noqa: E402
 from qcm_pak.visualization import (  # noqa: E402
+    fig_to_png_bytes,
     plot_cycles,
     plot_derivative,
     plot_etch,
@@ -106,3 +107,34 @@ def test_plot_etch_saturating() -> None:
 def test_plot_derivative_returns_figure() -> None:
     fig = plot_derivative(_simple_mass())
     assert isinstance(fig, Figure)
+
+
+def test_plots_do_not_register_with_pyplot() -> None:
+    """Figures are built via the OO API, so pyplot's global registry stays empty.
+
+    Regression test for a leak where ``plt.subplots()`` registered every
+    figure with pyplot's global state and nothing ever closed it — fatal
+    for a long-lived service handling many concurrent analysis requests.
+    """
+    plt = pytest.importorskip("matplotlib.pyplot")
+    assert plt.get_fignums() == []
+
+    plot_trace(_simple_mass())
+    plot_cycles(_simple_collection())
+    plot_derivative(_simple_mass())
+    plot_langmuir(
+        _simple_collection(),
+        LangmuirResult(step_name="A", model="mono", r_squared=0.99, k=0.1, theta_max=12.0),
+    )
+    plot_etch(
+        _simple_collection(),
+        EtchResult(step_name="A", model="saturating", r_squared=0.98, k=0.05, etch_max=3.0),
+    )
+
+    assert plt.get_fignums() == []
+
+
+def test_fig_to_png_bytes() -> None:
+    fig = plot_trace(_simple_mass())
+    png = fig_to_png_bytes(fig)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"

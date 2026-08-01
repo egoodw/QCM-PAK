@@ -29,7 +29,7 @@ Typical usage::
     print(f"R²={langmuir.r_squared:.4f}")
 """
 
-from qcm_pak import visualization
+from qcm_pak import serialization, visualization
 from qcm_pak._types import (
     AnalysisResult,
     Cycle,
@@ -100,6 +100,7 @@ __all__ = [
     "fit_langmuir",
     "fit_etch",
     "run_analysis",
-    # Submodule
+    # Submodules
     "visualization",
+    "serialization",
 ]

@@ -23,12 +23,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from qcm_pak.recipe import Recipe
+from qcm_pak.serialization import to_jsonable
 
 if TYPE_CHECKING:
     from qcm_pak.parameters import ALDParameters
@@ -84,6 +85,10 @@ class QCMDataset:
         """Total measurement duration in seconds."""
         return float(self.time[-1] - self.time[0])
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 @dataclass
 class MassDataset:
@@ -127,6 +132,10 @@ class MassDataset:
         pos = diffs[diffs > 0]
         return float(np.median(pos)) if len(pos) > 0 else float(np.max(np.abs(diffs)))
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 @dataclass
 class CycleIndex:
@@ -152,6 +161,10 @@ class CycleIndex:
     def n_detected(self) -> int:
         """Number of detected pulse events."""
         return len(self.step_onsets)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return cast(dict[str, Any], to_jsonable(self))
 
 
 # ── Analysis results (three levels) ──────────────────────────────────────────
@@ -199,6 +212,10 @@ class StepResult:
     mass_corrected: NDArray[np.float64]
     mass_change: float
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 @dataclass
 class SubCycleRun:
@@ -230,6 +247,10 @@ class SubCycleRun:
         """Net mass change across all steps in this SubCycle run (ng/cm²)."""
         return sum(s.mass_change for s in self.steps)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 @dataclass
 class Cycle:
@@ -253,6 +274,10 @@ class Cycle:
     def net_mass_change(self) -> float:
         """Net mass change across all sub-cycles in this outer cycle (ng/cm²)."""
         return sum(scr.total_mass_change for scr in self.sub_cycle_runs)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
 
 
 @dataclass
@@ -334,6 +359,10 @@ class CycleCollection:
             all_steps = [s for s in all_steps if s.sub_cycle_index == sub_cycle]
         return all_steps
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 # ── Kinetics results ──────────────────────────────────────────────────────────
 
@@ -379,6 +408,10 @@ class LangmuirResult:
     theta2: float | None = None
     covariance: NDArray[np.float64] | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 @dataclass
 class EtchResult:
@@ -420,6 +453,10 @@ class EtchResult:
     rate: float | None = None
     covariance: NDArray[np.float64] | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict (arrays become lists)."""
+        return cast(dict[str, Any], to_jsonable(self))
+
 
 # ── Top-level result container ────────────────────────────────────────────────
 
@@ -429,7 +466,9 @@ class AnalysisResult:
     """Container returned by :func:`~qcm_pak.pipeline.run_analysis`.
 
     All intermediate results are accessible as plain Python objects for
-    downstream computation. Call :meth:`save` to write files to disk.
+    downstream computation. Call :meth:`save` to write files to disk, or
+    :meth:`to_bytes` / :meth:`to_dict` for in-memory output (e.g. behind an
+    HTTP service handling concurrent requests).
 
     Parameters
     ----------
@@ -484,22 +523,62 @@ class AnalysisResult:
             step_results = self.cycles.steps(name=step_name)
             if not step_results:
                 continue
-            _write_step_tsv(step_results, data_dir / f"cycle_data_{step_name}.tsv")
+            path = data_dir / f"cycle_data_{step_name}.tsv"
+            path.write_bytes(_step_tsv_bytes(step_results))
 
         # Write diagnostic figures
         trace_fig = visualization.plot_trace(self.mass_data, self.cycle_index)
         trace_fig.savefig(fig_dir / "full_trace.png", dpi=150, bbox_inches="tight")
-        trace_fig.clf()
 
         deriv_fig = visualization.plot_derivative(self.mass_data)
         deriv_fig.savefig(
             fig_dir / "derivative_analysis.png", dpi=150, bbox_inches="tight"
         )
-        deriv_fig.clf()
+
+    def to_bytes(self) -> dict[str, bytes]:
+        """Render all analysis outputs in memory, without touching disk.
+
+        Mirrors :meth:`save`'s layout — ``data/cycle_data_{step_name}.tsv``
+        and ``figures/*.png`` — as a flat mapping of relative path to file
+        bytes. Use this instead of :meth:`save` when running behind a
+        service that handles concurrent requests and shouldn't write to a
+        shared filesystem path per request.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Relative output path (e.g. ``"data/cycle_data_TMA.tsv"``) mapped
+            to its file contents.
+        """
+        from qcm_pak import visualization
+
+        out: dict[str, bytes] = {}
+        for step_name in self.cycles.recipe.step_names():
+            step_results = self.cycles.steps(name=step_name)
+            if not step_results:
+                continue
+            out[f"data/cycle_data_{step_name}.tsv"] = _step_tsv_bytes(step_results)
+
+        trace_fig = visualization.plot_trace(self.mass_data, self.cycle_index)
+        out["figures/full_trace.png"] = visualization.fig_to_png_bytes(trace_fig)
+
+        deriv_fig = visualization.plot_derivative(self.mass_data)
+        out["figures/derivative_analysis.png"] = visualization.fig_to_png_bytes(
+            deriv_fig
+        )
+
+        return out
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize cycles, mass data, detection index, and params to a
+        JSON-compatible dict (arrays become lists). Figures are not
+        included — use :meth:`to_bytes` for those.
+        """
+        return cast(dict[str, Any], to_jsonable(self))
 
 
-def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
-    """Write a collection of StepResults to a TSV file.
+def _step_tsv_bytes(steps: list[StepResult]) -> bytes:
+    """Render a collection of StepResults as TSV bytes.
 
     Each column is one step occurrence; rows are time-point samples aligned
     to the step onset (time[0] = 0). The header row lists each occurrence as
@@ -516,4 +595,5 @@ def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
         col = f"cycle_{s.outer_cycle}_sc{s.sub_cycle_index}_run{s.sub_cycle_run}"
         data[col] = s.mass_corrected[:min_len]
 
-    pd.DataFrame(data).to_csv(path, sep="\t", index=False)
+    tsv_text = cast(str, pd.DataFrame(data).to_csv(sep="\t", index=False))
+    return tsv_text.encode("utf-8")

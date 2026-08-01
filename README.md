@@ -129,6 +129,33 @@ spec = qcm.ColumnSpec(freq_col="freq", time_col="time", time_unit="minutes", tem
 
 Supported `time_unit` values: `"seconds"`, `"milliseconds"`, `"minutes"`, `"hours"`, `"datetime"`, `"clock"`.
 
+## JSON Serialization
+
+Every public dataclass — `Recipe`, `ColumnSpec`, `AnalysisResult`, and
+everything in between — has a `to_dict()` method that returns plain
+dicts/lists/primitives safe for `json.dumps()`. Configuration types
+(`Recipe`, `SubCycle`, `PulseStep`, `ColumnSpec`, `SauerbreyConstants`,
+`DetectionParameters`, `ALDParameters`) also have `from_dict()`, so an
+experiment can be defined from a JSON payload instead of Python code —
+useful for a frontend or HTTP API sitting in front of this library.
+
+```python
+recipe_json = recipe.to_dict()          # -> dict, json.dumps()-able
+recipe = qcm.Recipe.from_dict(recipe_json)
+
+result_json = result.to_dict()          # cycles, mass_data, cycle_index, params
+```
+
+For services handling concurrent requests, `AnalysisResult.to_bytes()` is
+an in-memory alternative to `.save()` — it returns the same per-step TSVs
+and diagnostic PNGs as a `dict[str, bytes]` instead of writing to a shared
+output directory:
+
+```python
+files = result.to_bytes()
+# {"data/cycle_data_TMA.tsv": b"...", "figures/full_trace.png": b"\x89PNG..."}
+```
+
 ## License
 
 GPL v3 — see [LICENSE](LICENSE).
