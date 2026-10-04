@@ -67,10 +67,20 @@ def detect_pulses(
     Raises
     ------
     DetectionError
-        If detection cannot satisfy the recipe's expected event count.
+        If detection cannot satisfy the recipe's expected event count, or if
+        ``data.time`` isn't sorted in non-decreasing order (required for the
+        time-based sample lookups detection relies on).
     """
     if det_params is None:
         det_params = DetectionParameters()
+
+    if len(data.time) > 1 and np.any(np.diff(data.time) < 0):
+        raise DetectionError(
+            "MassDataset.time is not sorted in non-decreasing order. Pulse "
+            "detection locates onsets by searching directly in the time "
+            "array, which requires it to be sorted. Check that the correct "
+            "time column was selected during import."
+        )
 
     if det_params.method == "pelt_guided":
         return _detect_pelt_guided(data, params, det_params)
@@ -85,23 +95,28 @@ class _EventSpec(NamedTuple):
 
     step_name: str
     mass_effect: str        # 'gain', 'loss', 'any'
-    expected_idx: int       # sample index in MassDataset arrays
+    expected_time: float    # recipe-predicted onset time, in seconds
+    expected_idx: int       # nearest sample index for expected_time
     sub_cycle_index: int
     sub_cycle_run: int
     step_index: int
     outer_cycle: int
-    step_dur_samples: int   # step duration converted to samples
+    step_duration: float    # step duration in seconds
 
 
-def _build_timeline(recipe: Recipe, dt: float) -> list[_EventSpec]:
-    """Build the ordered list of expected pulse-event sample indices.
+def _build_timeline(recipe: Recipe, data: MassDataset) -> list[_EventSpec]:
+    """Build the ordered list of expected pulse-event times/indices.
 
     Parameters
     ----------
     recipe:
         The ALD/ALE recipe.
-    dt:
-        Median sampling interval of the MassDataset in seconds.
+    data:
+        The dataset being searched — ``expected_idx`` is located directly in
+        ``data.time`` via binary search rather than derived from a single
+        global sample interval, so this works regardless of whether samples
+        are evenly spaced (e.g. instrument bursts of near-duplicate
+        timestamps).
 
     Returns
     -------
@@ -110,22 +125,25 @@ def _build_timeline(recipe: Recipe, dt: float) -> list[_EventSpec]:
     """
     events: list[_EventSpec] = []
     t = recipe.start_time
+    time = data.time
+    n = len(time)
 
     for outer in range(recipe.repeats):
         for sc_idx, sub_cycle in enumerate(recipe.sub_cycles):
             for run in range(sub_cycle.repeats):
                 for s_idx, step in enumerate(sub_cycle.steps):
-                    expected_idx = int(round(t / dt))
+                    expected_idx = int(np.clip(np.searchsorted(time, t), 0, n - 1))
                     events.append(
                         _EventSpec(
                             step_name=step.name,
                             mass_effect=step.mass_effect,
+                            expected_time=t,
                             expected_idx=expected_idx,
                             sub_cycle_index=sc_idx,
                             sub_cycle_run=run,
                             step_index=s_idx,
                             outer_cycle=outer,
-                            step_dur_samples=max(1, int(step.duration / dt)),
+                            step_duration=step.duration,
                         )
                     )
                     t += step.duration
@@ -150,8 +168,8 @@ def _detect_pelt_guided(
         ) from exc
 
     mass = data.mass
+    time = data.time
     n = len(mass)
-    dt = data.dt
 
     # Estimate penalty
     if det.penalty == "auto":
@@ -167,22 +185,23 @@ def _detect_pelt_guided(
     candidates = [bp for bp in breakpoints if bp < n]
 
     # Build expected timeline
-    timeline = _build_timeline(params.recipe, dt)
+    timeline = _build_timeline(params.recipe, data)
     candidates.sort()
-    onsets = _assign_candidates(timeline, candidates, mass, n, dt, det.recipe_tolerance)
+    onsets, confidence = _assign_candidates(
+        timeline, candidates, mass, time, det.recipe_tolerance
+    )
 
     _check_count(onsets, params.recipe)
-    return CycleIndex(step_onsets=onsets, recipe=params.recipe)
+    return CycleIndex(step_onsets=onsets, recipe=params.recipe, confidence=confidence)
 
 
 def _assign_candidates(
     timeline: list[_EventSpec],
     candidates: list[int],
     mass: NDArray[np.float64],
-    n: int,
-    dt: float,
+    time: NDArray[np.float64],
     tolerance: float,
-) -> list[tuple[str, int]]:
+) -> tuple[list[tuple[str, int]], list[float]]:
     """Optimal order-preserving match of PELT candidates to recipe events.
 
     Recipe events are strictly chronological, so this is a monotonic
@@ -197,16 +216,20 @@ def _assign_candidates(
     it. The DP below picks the whole sequence jointly, so it is immune to
     that local ambiguity (same technique as sequence alignment).
     """
+    n = len(time)
     k = len(timeline)
     m = len(candidates)
     fallback_cost = float(n)  # always worse than any real in-window match
 
     windows: list[tuple[int, int]] = []
+    tol_samples_list: list[int] = []
     for event in timeline:
-        tol_samples = max(1, int(event.step_dur_samples * tolerance))
-        lo = max(0, event.expected_idx - tol_samples)
-        hi = min(n - 1, event.expected_idx + tol_samples)
+        tol_seconds = event.step_duration * tolerance
+        lo = int(np.clip(np.searchsorted(time, event.expected_time - tol_seconds), 0, n - 1))
+        hi = int(np.clip(np.searchsorted(time, event.expected_time + tol_seconds), 0, n - 1))
+        hi = max(hi, lo)
         windows.append((lo, hi))
+        tol_samples_list.append(max(1, hi - lo))
 
     # dp[i][j]: min cost assigning the first i events using only
     # candidates[:j]. choice[i][j]: 0 = leave candidate j-1 unused,
@@ -238,26 +261,39 @@ def _assign_candidates(
             choice[i][j] = best_choice
 
     onsets: list[tuple[str, int] | None] = [None] * k
+    confidence: list[float] = [0.0] * k
     i, j = k, m
     while i > 0:
         step = choice[i][j]
         event = timeline[i - 1]
         if step == 1:
-            onsets[i - 1] = (event.step_name, candidates[j - 1])
+            c = candidates[j - 1]
+            onsets[i - 1] = (event.step_name, c)
+            tol = tol_samples_list[i - 1]
+            dist = abs(c - event.expected_idx)
+            # Full confidence for an exact match, decaying linearly to 0.3
+            # at the edge of the tolerance window (still a real candidate,
+            # just a less certain match).
+            confidence[i - 1] = max(0.3, 1.0 - dist / tol) if tol > 0 else 1.0
             i, j = i - 1, j - 1
         elif step == 2:
             warnings.warn(
                 f"No PELT candidate found near expected onset for "
-                f"'{event.step_name}' at ~{event.expected_idx * dt:.1f}s "
+                f"'{event.step_name}' at ~{event.expected_time:.1f}s "
                 f"(outer cycle {event.outer_cycle}). Using recipe-estimated position.",
                 stacklevel=4,
             )
             onsets[i - 1] = (event.step_name, min(event.expected_idx, n - 1))
+            # No real changepoint was found — this onset is a pure recipe-timing
+            # guess and should be reviewed first.
+            confidence[i - 1] = 0.15
             i -= 1
         else:
             j -= 1
 
-    return [o for o in onsets if o is not None]
+    result_onsets = [o for o in onsets if o is not None]
+    result_confidence = [c for o, c in zip(onsets, confidence) if o is not None]
+    return result_onsets, result_confidence
 
 
 def _sign_compatible(
@@ -306,8 +342,8 @@ def _detect_hybrid(
 ) -> CycleIndex:
     """Recipe-guided derivative search (port of QCMPy 0.5 CycleDetector)."""
     mass = data.mass
+    time = data.time
     n = len(mass)
-    dt = data.dt
 
     # Smooth the mass signal
     win = min(det.smoothing_window, n // 4 * 2 + 1)   # must be odd and < n
@@ -315,24 +351,32 @@ def _detect_hybrid(
         win += 1
     poly = min(det.savgol_polyorder, win - 1)
     smooth = savgol_filter(mass, window_length=win, polyorder=poly)
-    deriv = np.gradient(smooth, dt)
+    # np.gradient accepts the actual sample coordinates, so the derivative is
+    # correct at each point's real local spacing rather than assuming a
+    # single global sample interval (which breaks down for non-uniformly
+    # sampled data, e.g. instrument bursts of near-duplicate timestamps).
+    deriv = np.gradient(smooth, time)
 
-    timeline = _build_timeline(params.recipe, dt)
-    baseline_pts = max(1, int(det.baseline_window / dt))
+    timeline = _build_timeline(params.recipe, data)
 
     onsets: list[tuple[str, int]] = []
+    confidence: list[float] = []
 
     for event in timeline:
-        # Additive tolerance: ±(tol × step_duration) in samples.
-        tol_samples = max(1, int(event.step_dur_samples * det.recipe_tolerance))
-        lo = max(0, event.expected_idx - tol_samples)
-        hi = min(n - 1, event.expected_idx + tol_samples)
+        # Additive tolerance: ±(tol × step_duration), located directly in
+        # the time array rather than converted through a global dt.
+        tol_seconds = event.step_duration * det.recipe_tolerance
+        lo = int(np.clip(np.searchsorted(time, event.expected_time - tol_seconds), 0, n - 1))
+        hi = int(np.clip(np.searchsorted(time, event.expected_time + tol_seconds), 0, n - 1))
+        hi = max(hi, lo)
 
         # Baseline window: go back one full step duration before the search
         # window so we sample genuinely quiet pre-pulse signal rather than
         # the tail of the preceding event's derivative spike.
-        baseline_end = max(0, lo - event.step_dur_samples)
-        baseline_start = max(0, baseline_end - baseline_pts)
+        baseline_end_time = time[lo] - event.step_duration
+        baseline_start_time = baseline_end_time - det.baseline_window
+        baseline_end = int(np.clip(np.searchsorted(time, baseline_end_time), 0, n))
+        baseline_start = int(np.clip(np.searchsorted(time, baseline_start_time), 0, n))
         baseline_deriv = deriv[baseline_start:baseline_end]
         if len(baseline_deriv) > 2:
             threshold = (
@@ -344,7 +388,8 @@ def _detect_hybrid(
 
         segment = deriv[lo : hi + 1]
         if len(segment) == 0:
-            onsets.append((event.step_name, min(event.expected_idx, n - 1)))
+            onsets.append((event.step_name, event.expected_idx))
+            confidence.append(0.15)
             continue
 
         # Select derivative direction based on mass_effect
@@ -359,10 +404,11 @@ def _detect_hybrid(
         # is systematically early. The argmax is unbiased and also degrades
         # more gracefully under low-SNR conditions.
         best_local = int(np.argmax(scored))
-        if scored[best_local] < threshold:
+        peak = float(scored[best_local])
+        if peak < threshold:
             warnings.warn(
                 f"Low-confidence onset for '{event.step_name}' at "
-                f"~{event.expected_idx * dt:.1f}s "
+                f"~{event.expected_time:.1f}s "
                 f"(outer cycle {event.outer_cycle}). "
                 "Peak derivative is below the adaptive threshold; detection "
                 "may be inaccurate. Consider using pelt_guided instead.",
@@ -370,9 +416,13 @@ def _detect_hybrid(
             )
 
         onsets.append((event.step_name, lo + best_local))
+        # How far the derivative peak clears the adaptive threshold — a peak
+        # well above threshold is a confident detection, one below it (the
+        # warning case above) is not.
+        confidence.append(float(np.clip(peak / threshold, 0.15, 1.0)) if threshold > 0 else 0.5)
 
     _check_count(onsets, params.recipe)
-    return CycleIndex(step_onsets=onsets, recipe=params.recipe)
+    return CycleIndex(step_onsets=onsets, recipe=params.recipe, confidence=confidence)
 
 
 # ── Shared validation ─────────────────────────────────────────────────────────
@@ -382,7 +432,18 @@ def _check_count(
     onsets: list[tuple[str, int]],
     recipe: Recipe,
 ) -> None:
-    """Raise DetectionError if the detected count doesn't match the recipe."""
+    """Raise DetectionError if the detected count is wrong, or onsets aren't
+    strictly increasing.
+
+    extraction.py assumes each step's window runs from its onset to the
+    *next* onset — a tie or reversal produces a zero- or negative-length
+    slice there, which surfaces as a confusing IndexError far from the real
+    cause. ``hybrid`` is especially prone to this: unlike ``pelt_guided``
+    (whose DP assignment explicitly preserves chronological order — see its
+    docstring), it searches each event's window independently with no
+    coordination between neighbors, so a long step's wide tolerance window
+    can collide with a short neighboring step's window.
+    """
     expected = recipe.total_events
     got = len(onsets)
     if got != expected:
@@ -390,3 +451,15 @@ def _check_count(
             f"Expected {expected} pulse events from recipe but detected {got}. "
             "Try adjusting DetectionParameters.recipe_tolerance or penalty."
         )
+    for i in range(1, got):
+        prev_name, prev_idx = onsets[i - 1]
+        name, idx = onsets[i]
+        if idx <= prev_idx:
+            raise DetectionError(
+                f"Detected onset for '{name}' (event {i}, sample {idx}) is not "
+                f"after '{prev_name}' (event {i - 1}, sample {prev_idx}) — onsets "
+                "must be strictly increasing. This usually means two adjacent "
+                "steps' search windows overlapped (a common failure mode for "
+                "recipes with very uneven step durations under the 'hybrid' "
+                "method). Try pelt_guided instead, or reduce recipe_tolerance."
+            )

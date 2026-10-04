@@ -1,23 +1,31 @@
 """
 Langmuir adsorption and etch kinetics fitting.
 
-Two public functions:
+Four public functions:
 
 :func:`fit_langmuir`
-    Fit Langmuir adsorption kinetics to ALD gain steps.
+    Fit Langmuir adsorption kinetics to ALD gain steps, as one ensemble curve
+    averaged across every occurrence of the step.
     Monomodal: θ(t) = θ_max · (1 − exp(−k · t))
     Bimodal:   θ(t) = θ₁ · (1 − exp(−k₁ · t)) + θ₂ · (1 − exp(−k₂ · t))
 
+:func:`fit_langmuir_per_cycle`
+    Same models, fit independently to each occurrence instead of the
+    ensemble average — use this to track drift in k/θ_max across a run.
+
 :func:`fit_etch`
-    Fit etch kinetics to ALE loss steps.
+    Fit etch kinetics to ALE loss steps, as one ensemble curve.
     Saturating: E(t) = E_max · (1 − exp(−k · t))
     Linear:     E(t) = rate · t
 
-Both use a two-stage lmfit fitting strategy:
+:func:`fit_etch_per_cycle`
+    Same models, fit independently to each occurrence.
+
+All four use a two-stage lmfit fitting strategy:
   1. ``differential_evolution`` global search for robust initial parameters.
   2. Levenberg-Marquardt local polish for precise covariance estimation.
 
-Bimodal degeneracy handling in ``fit_langmuir``:
+Bimodal degeneracy handling in ``fit_langmuir``/``fit_langmuir_per_cycle``:
   If BIC prefers the monomodal fit, or if |ρ(k₁, k₂)| > 0.95 (indicating
   the two rate constants are collinear), a :class:`UserWarning` is issued and
   the function returns a monomodal :class:`~qcm_pak._types.LangmuirResult`.
@@ -104,6 +112,71 @@ def fit_langmuir(
             step, t_vals, theta_vals, k_bounds, theta_bounds, force=force
         )
     return _fit_langmuir_mono(step, t_vals, theta_vals, k_bounds, theta_bounds)
+
+
+def fit_langmuir_per_cycle(
+    cycles: CycleCollection,
+    step: str,
+    sub_cycle: int | None = None,
+    model: Literal["mono", "bi"] = "mono",
+    k_bounds: tuple[float, float] = (0.001, 10.0),
+    theta_bounds: tuple[float, float] = (0.0, 300.0),
+    force: bool = False,
+) -> list[LangmuirResult]:
+    """Fit Langmuir kinetics independently to each occurrence of a step.
+
+    Unlike :func:`fit_langmuir`, which fits one ensemble-averaged curve across
+    all occurrences of ``step``, this fits each occurrence's own (time,
+    mass_corrected) trace separately — use it to track how the rate constant
+    or coverage drifts cycle-to-cycle across a run.
+
+    Parameters
+    ----------
+    cycles, step, sub_cycle, model, k_bounds, theta_bounds, force:
+        Same meaning as in :func:`fit_langmuir`.
+
+    Returns
+    -------
+    list[LangmuirResult]
+        One result per occurrence that converged, in chronological order,
+        each carrying its ``outer_cycle``/``sub_cycle_run``. Occurrences whose
+        fit fails to converge are skipped (with a :class:`UserWarning`) rather
+        than aborting the whole batch — a single noisy cycle shouldn't hide
+        the trend across the rest.
+
+    Raises
+    ------
+    ValueError
+        If no steps named ``step`` exist in ``cycles``.
+    """
+    step_results = cycles.steps(name=step, sub_cycle=sub_cycle)
+    if not step_results:
+        raise ValueError(
+            f"No step named '{step}' found in CycleCollection"
+            + (f" for sub_cycle={sub_cycle}" if sub_cycle is not None else "")
+        )
+
+    results: list[LangmuirResult] = []
+    for sr in step_results:
+        t = sr.time.astype(np.float64)
+        theta = np.abs(sr.mass_corrected).astype(np.float64)
+        try:
+            if model == "bi":
+                result = _fit_langmuir_bi(step, t, theta, k_bounds, theta_bounds, force=force)
+            else:
+                result = _fit_langmuir_mono(step, t, theta, k_bounds, theta_bounds)
+        except ConvergenceError as exc:
+            warnings.warn(
+                f"Per-cycle Langmuir fit skipped for '{step}' "
+                f"(outer_cycle={sr.outer_cycle}, sub_cycle_run={sr.sub_cycle_run}): {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+        result.outer_cycle = sr.outer_cycle
+        result.sub_cycle_run = sr.sub_cycle_run
+        results.append(result)
+    return results
 
 
 def _langmuir_dataset(
@@ -352,6 +425,67 @@ def fit_etch(
     if model == "linear":
         return _fit_etch_linear(step, t_vals, etch_vals, etch_bounds)
     return _fit_etch_saturating(step, t_vals, etch_vals, k_bounds, etch_bounds)
+
+
+def fit_etch_per_cycle(
+    cycles: CycleCollection,
+    step: str,
+    sub_cycle: int | None = None,
+    model: Literal["saturating", "linear"] = "saturating",
+    k_bounds: tuple[float, float] = (0.001, 10.0),
+    etch_bounds: tuple[float, float] = (0.0, 10.0),
+) -> list[EtchResult]:
+    """Fit etch kinetics independently to each occurrence of a step.
+
+    Unlike :func:`fit_etch`, which fits one ensemble-averaged curve across all
+    occurrences, this fits each occurrence's own trace separately — use it to
+    track cycle-to-cycle drift in etch rate/depth across a run.
+
+    Parameters
+    ----------
+    cycles, step, sub_cycle, model, k_bounds, etch_bounds:
+        Same meaning as in :func:`fit_etch`.
+
+    Returns
+    -------
+    list[EtchResult]
+        One result per occurrence that converged, in chronological order,
+        each carrying its ``outer_cycle``/``sub_cycle_run``. Occurrences whose
+        fit fails to converge are skipped (with a :class:`UserWarning`).
+
+    Raises
+    ------
+    ValueError
+        If no steps named ``step`` exist in ``cycles``.
+    """
+    step_results = cycles.steps(name=step, sub_cycle=sub_cycle)
+    if not step_results:
+        raise ValueError(
+            f"No step named '{step}' found in CycleCollection"
+            + (f" for sub_cycle={sub_cycle}" if sub_cycle is not None else "")
+        )
+
+    results: list[EtchResult] = []
+    for sr in step_results:
+        t = sr.time.astype(np.float64)
+        etch = np.abs(sr.mass_corrected).astype(np.float64)
+        try:
+            if model == "linear":
+                result = _fit_etch_linear(step, t, etch, etch_bounds)
+            else:
+                result = _fit_etch_saturating(step, t, etch, k_bounds, etch_bounds)
+        except ConvergenceError as exc:
+            warnings.warn(
+                f"Per-cycle etch fit skipped for '{step}' "
+                f"(outer_cycle={sr.outer_cycle}, sub_cycle_run={sr.sub_cycle_run}): {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+        result.outer_cycle = sr.outer_cycle
+        result.sub_cycle_run = sr.sub_cycle_run
+        results.append(result)
+    return results
 
 
 def _fit_etch_saturating(
