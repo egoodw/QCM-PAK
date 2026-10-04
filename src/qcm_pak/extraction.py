@@ -115,9 +115,7 @@ def _extract_step(
     mass_change = float(mass_corrected[-1]) if len(mass_corrected) > 0 else 0.0
 
     # Determine position within recipe hierarchy from event_position
-    sc_index, sc_run, s_index, outer = _position_in_recipe(
-        event_position, recipe
-    )
+    outer, sc_index, sc_run, s_index = recipe.event_position(event_position)
 
     return StepResult(
         step_name=step_name,
@@ -158,45 +156,6 @@ def _baseline_correct(
     baseline = float(np.mean(mass[baseline_start:onset_idx])) if onset_idx > 0 else 0.0
     segment = mass[onset_idx:end_idx]
     return segment - baseline
-
-
-def _position_in_recipe(
-    event_position: int,
-    recipe: Recipe,  # noqa: F821
-) -> tuple[int, int, int, int]:
-    """Map a flat event index to its position in the recipe hierarchy.
-
-    Returns ``(sub_cycle_index, sub_cycle_run, step_index, outer_cycle)``.
-
-
-    Parameters
-    ----------
-    event_position:
-        0-based absolute position in the flat CycleIndex.step_onsets list.
-    recipe:
-        The Recipe used during detection.
-
-    Returns
-    -------
-    tuple
-        ``(sub_cycle_index, sub_cycle_run, step_index, outer_cycle)``
-    """
-
-    steps_per_outer = recipe.steps_per_cycle
-    outer = event_position // steps_per_outer
-    pos_in_outer = event_position % steps_per_outer
-
-    for sc_idx, sub_cycle in enumerate(recipe.sub_cycles):
-        for run in range(sub_cycle.repeats):
-            for s_idx in range(len(sub_cycle.steps)):
-                if pos_in_outer == 0:
-                    return sc_idx, run, s_idx, outer
-                pos_in_outer -= 1
-
-    # Should never reach here if CycleIndex is valid
-    raise RuntimeError(  # pragma: no cover
-        f"event_position {event_position} exceeds recipe structure"
-    )
 
 
 def _group_sub_cycle_runs(

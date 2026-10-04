@@ -9,7 +9,7 @@ apply per-pulse overrides after the fact, without re-running detection.
 Corrections only move onsets or flag pulses as excluded; they never remove
 entries from :class:`~qcm_pak._types.CycleIndex.step_onsets`. Removing an
 entry would shift every later pulse's position in the recipe hierarchy
-(:func:`qcm_pak.extraction._position_in_recipe` assumes a flat index that
+(:meth:`qcm_pak.recipe.Recipe.event_position` assumes a flat index that
 matches the recipe's step order 1:1). Call :func:`~qcm_pak.extraction.extract_cycles`
 again on the corrected :class:`~qcm_pak._types.CycleIndex` to regenerate results.
 """

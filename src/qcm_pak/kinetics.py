@@ -174,6 +174,7 @@ def fit_langmuir_per_cycle(
             )
             continue
         result.outer_cycle = sr.outer_cycle
+        result.sub_cycle_index = sr.sub_cycle_index
         result.sub_cycle_run = sr.sub_cycle_run
         results.append(result)
     return results
@@ -483,6 +484,7 @@ def fit_etch_per_cycle(
             )
             continue
         result.outer_cycle = sr.outer_cycle
+        result.sub_cycle_index = sr.sub_cycle_index
         result.sub_cycle_run = sr.sub_cycle_run
         results.append(result)
     return results

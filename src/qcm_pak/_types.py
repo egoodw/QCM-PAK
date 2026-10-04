@@ -449,7 +449,7 @@ class LangmuirResult:
         Bimodal parameters. Present when ``model == "bi"``.
     covariance:
         Parameter covariance matrix from the fit, if available.
-    outer_cycle, sub_cycle_run:
+    outer_cycle, sub_cycle_index, sub_cycle_run:
         Which occurrence this result came from, when produced by
         :func:`~qcm_pak.kinetics.fit_langmuir_per_cycle` (which fits each
         occurrence of a step independently, for tracking drift across a
@@ -474,6 +474,7 @@ class LangmuirResult:
     theta2: float | None = None
     covariance: NDArray[np.float64] | None = None
     outer_cycle: int | None = None
+    sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
 
 
@@ -501,7 +502,7 @@ class EtchResult:
         Etch rate in ng/cm²/s (linear model only).
     covariance:
         Parameter covariance matrix, if available.
-    outer_cycle, sub_cycle_run:
+    outer_cycle, sub_cycle_index, sub_cycle_run:
         Which occurrence this result came from, when produced by
         :func:`~qcm_pak.kinetics.fit_etch_per_cycle`. ``None`` for the
         ensemble-averaged fit from :func:`~qcm_pak.kinetics.fit_etch`.
@@ -521,6 +522,7 @@ class EtchResult:
     rate: float | None = None
     covariance: NDArray[np.float64] | None = None
     outer_cycle: int | None = None
+    sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
 
 

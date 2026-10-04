@@ -184,6 +184,36 @@ class Recipe:
         """Total pulse events across the entire experiment."""
         return self.steps_per_cycle * self.repeats
 
+    def event_position(self, event_index: int) -> tuple[int, int, int, int]:
+        """Map a flat event index to its position in the recipe hierarchy.
+
+        Parameters
+        ----------
+        event_index:
+            0-based position in the chronological event sequence (the same
+            order as ``CycleIndex.step_onsets``).
+
+        Returns
+        -------
+        tuple
+            ``(outer_cycle, sub_cycle_index, sub_cycle_run, step_index)``
+        """
+        if not 0 <= event_index < self.total_events:
+            raise IndexError(
+                f"event_index {event_index} out of range for a recipe with "
+                f"{self.total_events} events"
+            )
+        outer, pos = divmod(event_index, self.steps_per_cycle)
+        for sc_idx, sub_cycle in enumerate(self.sub_cycles):
+            block = sub_cycle.repeats * len(sub_cycle.steps)
+            if pos < block:
+                run, s_idx = divmod(pos, len(sub_cycle.steps))
+                return outer, sc_idx, run, s_idx
+            pos -= block
+        raise RuntimeError(  # pragma: no cover
+            f"event_index {event_index} exceeds recipe structure"
+        )
+
     def step_names(self) -> list[str]:
         """Unique step names across all SubCycles, in order of first appearance."""
         seen: list[str] = []

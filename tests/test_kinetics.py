@@ -241,3 +241,28 @@ def test_fit_etch_per_cycle_returns_one_result_per_occurrence() -> None:
     etch_max_mean = float(np.mean([r.etch_max for r in results]))
     assert k_mean == pytest.approx(k_true, rel=0.4)
     assert etch_max_mean == pytest.approx(etch_max_true, rel=0.2)
+
+
+def test_fit_per_cycle_super_cycle_occurrences_are_distinct() -> None:
+    """Same step in two sub-cycles of one outer cycle must not share a key."""
+    recipe = Recipe(
+        sub_cycles=[
+            SubCycle(steps=[PulseStep("A", 0.1, 30.0)], repeats=1),
+            SubCycle(steps=[PulseStep("A", 0.1, 30.0)], repeats=1),
+        ],
+        repeats=2,
+    )
+    cycles = []
+    for outer in range(2):
+        runs = []
+        for sc_idx in range(2):
+            s = _make_step("A", 30.0, 10.0, k=0.1, theta_max=10.0, outer=outer)
+            s.sub_cycle_index = sc_idx
+            runs.append(SubCycleRun(sub_cycle_index=sc_idx, run_number=0, outer_cycle=outer, steps=[s]))
+        cycles.append(Cycle(cycle_number=outer, sub_cycle_runs=runs))
+    collection = CycleCollection(cycles=cycles, recipe=recipe)
+
+    results = fit_langmuir_per_cycle(collection, step="A", model="mono")
+
+    keys = [(r.outer_cycle, r.sub_cycle_index, r.sub_cycle_run) for r in results]
+    assert keys == [(0, 0, 0), (0, 1, 0), (1, 0, 0), (1, 1, 0)]
