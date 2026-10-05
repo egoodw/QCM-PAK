@@ -6,8 +6,9 @@ change Δm (g/cm²):
 
     Δm = C · Δf,   where C = −√(ρ_q · μ_q) / (2 · f₀² · n)
 
-For a standard 5 MHz AT-cut quartz crystal at the fundamental harmonic,
-C ≈ −17.7 ng/cm²/Hz (a frequency decrease corresponds to a mass increase).
+For the default 6 MHz AT-cut quartz crystal at the fundamental harmonic,
+C ≈ −12.27 ng/cm²/Hz; for a 5 MHz crystal, C ≈ −17.7 ng/cm²/Hz. A frequency
+decrease corresponds to a mass increase.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ def frequency_to_mass(
     data:
         Raw QCM dataset from :func:`~qcm_pak.io.load_data`.
     constants:
-        Crystal physical constants. If ``None``, standard 5 MHz AT-cut
-        quartz defaults are used.
+        Crystal physical constants. If ``None``, the 6 MHz AT-cut quartz
+        defaults are used.
 
     Returns
     -------

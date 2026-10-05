@@ -21,7 +21,7 @@ Top-level container:
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -117,6 +117,11 @@ class MassDataset:
         return len(self.time)
 
     @property
+    def duration(self) -> float:
+        """Total elapsed time span in seconds (time[-1] - time[0])."""
+        return float(self.time[-1] - self.time[0]) if len(self.time) > 1 else 0.0
+
+    @property
     def dt(self) -> float:
         """Median positive sampling interval in seconds.
 
@@ -126,6 +131,38 @@ class MassDataset:
         diffs = np.diff(self.time)
         pos = diffs[diffs > 0]
         return float(np.median(pos)) if len(pos) > 0 else float(np.max(np.abs(diffs)))
+
+    def check_dt_sanity(self, tolerance: float = 50.0) -> None:
+        """Raise ValueError if the median-based ``dt`` looks corrupted.
+
+        Compares ``dt`` against the naive average spacing (``duration /
+        (n_points - 1)``) — for real, evenly-ish sampled data these should be
+        within an order of magnitude of each other. A far larger mismatch
+        (default threshold: 50x) means the time column has enough
+        near-duplicate/clustered timestamps to drag the median down by orders
+        of magnitude — e.g. an instrument that logs several near-simultaneous
+        readings per acquisition "tick" — which silently breaks every
+        sample-index computation built on ``dt`` without look at what the
+        time column happens to be named.
+        """
+        if self.n_points < 2:
+            return
+        naive_dt = self.duration / (self.n_points - 1)
+        if naive_dt <= 0 or self.dt <= 0:
+            return
+        ratio = max(naive_dt / self.dt, self.dt / naive_dt)
+        if ratio > tolerance:
+            raise ValueError(
+                f"MassDataset.dt ({self.dt:.6g}s, the median positive sample "
+                f"spacing) is {ratio:,.0f}x different from the naive average "
+                f"spacing (duration / n_points = {naive_dt:.6g}s). This "
+                "usually means the time column has clusters of near-"
+                "duplicate timestamps (e.g. an instrument logging several "
+                "readings per acquisition burst) that drag the median-based "
+                "estimate down, corrupting every sample-index computation "
+                "that depends on it. Check that the correct time column was "
+                "selected during import."
+            )
 
 
 @dataclass
@@ -143,15 +180,54 @@ class CycleIndex:
         arrays. The order follows the recipe step traversal order.
     recipe:
         The Recipe used for detection, kept for reference during extraction.
+    confidence:
+        Per-onset detection confidence in ``[0, 1]``, same order and length as
+        ``step_onsets``, populated by :func:`~qcm_pak.detection.detect_pulses`.
+        Empty if not computed. Used to prioritize which pulses a reviewer
+        should look at first.
+    excluded:
+        Per-onset exclusion flags, same order and length as ``step_onsets``.
+        Empty means nothing has been excluded. Set via
+        :func:`~qcm_pak.corrections.apply_corrections`; entries are never
+        removed from ``step_onsets`` (that would desync every subsequent
+        pulse's position in the recipe hierarchy) — excluded pulses are kept
+        in place and filtered out later, at the :class:`StepResult` level.
     """
 
     step_onsets: list[tuple[str, int]]
     recipe: Recipe
+    confidence: list[float] = field(default_factory=list)
+    excluded: list[bool] = field(default_factory=list)
 
     @property
     def n_detected(self) -> int:
         """Number of detected pulse events."""
         return len(self.step_onsets)
+
+
+@dataclass
+class PulseCorrection:
+    """One user-supplied correction to a detected pulse onset.
+
+    Passed to :func:`~qcm_pak.corrections.apply_corrections`.
+
+    Parameters
+    ----------
+    pulse_id:
+        Index into ``CycleIndex.step_onsets`` identifying which pulse this
+        correction applies to.
+    new_onset_idx:
+        New onset sample index, or ``None`` to leave the detected onset
+        unchanged (e.g. when only setting ``excluded``).
+    excluded:
+        If ``True``, this pulse is dropped from kinetics fitting by default
+        (via ``CycleCollection.steps()``) but its :class:`StepResult` is
+        still produced, with ``excluded=True``.
+    """
+
+    pulse_id: int
+    new_onset_idx: int | None = None
+    excluded: bool = False
 
 
 # ── Analysis results (three levels) ──────────────────────────────────────────
@@ -186,6 +262,11 @@ class StepResult:
         Baseline-corrected mass in ng/cm².
     mass_change:
         Net mass change during this step in ng/cm². Negative for loss steps.
+    excluded:
+        ``True`` if a user excluded this pulse during review (see
+        :func:`~qcm_pak.corrections.apply_corrections`). Excluded steps are
+        omitted from ``CycleCollection.steps()`` by default, so they drop out
+        of kinetics fitting automatically.
     """
 
     step_name: str
@@ -198,6 +279,7 @@ class StepResult:
     mass_raw: NDArray[np.float64]
     mass_corrected: NDArray[np.float64]
     mass_change: float
+    excluded: bool = False
 
 
 @dataclass
@@ -307,6 +389,7 @@ class CycleCollection:
         self,
         name: str | None = None,
         sub_cycle: int | None = None,
+        include_excluded: bool = False,
     ) -> list[StepResult]:
         """Flat list of all StepResults, with optional filters.
 
@@ -316,6 +399,10 @@ class CycleCollection:
             If given, return only steps whose ``step_name`` matches.
         sub_cycle:
             If given, return only steps from ``sub_cycle[sub_cycle]``.
+        include_excluded:
+            If ``False`` (default), steps a user excluded during pulse
+            review are omitted. Kinetics fitting relies on this default so
+            excluded pulses are dropped automatically.
 
         Returns
         -------
@@ -328,6 +415,8 @@ class CycleCollection:
             for scr in c.sub_cycle_runs
             for s in scr.steps
         ]
+        if not include_excluded:
+            all_steps = [s for s in all_steps if not s.excluded]
         if name is not None:
             all_steps = [s for s in all_steps if s.step_name == name]
         if sub_cycle is not None:
@@ -360,6 +449,12 @@ class LangmuirResult:
         Bimodal parameters. Present when ``model == "bi"``.
     covariance:
         Parameter covariance matrix from the fit, if available.
+    outer_cycle, sub_cycle_index, sub_cycle_run:
+        Which occurrence this result came from, when produced by
+        :func:`~qcm_pak.kinetics.fit_langmuir_per_cycle` (which fits each
+        occurrence of a step independently, for tracking drift across a
+        run). ``None`` for the ensemble-averaged fit from
+        :func:`~qcm_pak.kinetics.fit_langmuir`, which isn't tied to one cycle.
 
     Notes
     -----
@@ -378,6 +473,9 @@ class LangmuirResult:
     theta1: float | None = None
     theta2: float | None = None
     covariance: NDArray[np.float64] | None = None
+    outer_cycle: int | None = None
+    sub_cycle_index: int | None = None
+    sub_cycle_run: int | None = None
 
 
 @dataclass
@@ -404,6 +502,10 @@ class EtchResult:
         Etch rate in ng/cm²/s (linear model only).
     covariance:
         Parameter covariance matrix, if available.
+    outer_cycle, sub_cycle_index, sub_cycle_run:
+        Which occurrence this result came from, when produced by
+        :func:`~qcm_pak.kinetics.fit_etch_per_cycle`. ``None`` for the
+        ensemble-averaged fit from :func:`~qcm_pak.kinetics.fit_etch`.
 
     Notes
     -----
@@ -419,6 +521,9 @@ class EtchResult:
     etch_max: float | None = None
     rate: float | None = None
     covariance: NDArray[np.float64] | None = None
+    outer_cycle: int | None = None
+    sub_cycle_index: int | None = None
+    sub_cycle_run: int | None = None
 
 
 # ── Top-level result container ────────────────────────────────────────────────

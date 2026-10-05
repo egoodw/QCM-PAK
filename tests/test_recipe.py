@@ -89,3 +89,45 @@ def test_recipe_cycle_duration() -> None:
         repeats=1,
     )
     assert recipe.cycle_duration == pytest.approx(20.2)
+
+
+def _super_cycle_recipe() -> Recipe:
+    return Recipe(
+        sub_cycles=[
+            SubCycle(steps=[PulseStep("A", 0.1, 10), PulseStep("B", 0.1, 10)], repeats=2),
+            SubCycle(steps=[PulseStep("A", 0.1, 10), PulseStep("C", 0.2, 10)], repeats=3),
+        ],
+        repeats=2,
+    )
+
+
+def test_event_position_matches_recipe_traversal() -> None:
+    recipe = _super_cycle_recipe()
+    expected = [
+        (outer, sc_idx, run, s_idx)
+        for outer in range(recipe.repeats)
+        for sc_idx, sc in enumerate(recipe.sub_cycles)
+        for run in range(sc.repeats)
+        for s_idx in range(len(sc.steps))
+    ]
+    assert [recipe.event_position(i) for i in range(recipe.total_events)] == expected
+
+
+def test_event_position_three_step_cycle() -> None:
+    recipe = Recipe(
+        sub_cycles=[SubCycle(steps=[
+            PulseStep("A", 0.1, 10), PulseStep("B", 0.1, 10), PulseStep("C", 0.1, 10),
+        ])],
+        repeats=100,
+    )
+    # Event 5 is the 3rd step (C) of the 2nd outer cycle
+    assert recipe.event_position(5) == (1, 0, 0, 2)
+    assert recipe.event_position(299) == (99, 0, 0, 2)
+
+
+def test_event_position_out_of_range() -> None:
+    recipe = _super_cycle_recipe()
+    with pytest.raises(IndexError):
+        recipe.event_position(recipe.total_events)
+    with pytest.raises(IndexError):
+        recipe.event_position(-1)

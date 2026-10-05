@@ -39,8 +39,8 @@ def run_analysis(
     spec:
         Column layout and unit declaration for the CSV file.
     crystal:
-        QCM crystal physical constants. If ``None``, standard 5 MHz AT-cut
-        quartz defaults are used.
+        QCM crystal physical constants. If ``None``, the 6 MHz AT-cut quartz
+        defaults are used.
     det_params:
         Pulse detection configuration. If ``None``, ``pelt_guided`` defaults
         are used.

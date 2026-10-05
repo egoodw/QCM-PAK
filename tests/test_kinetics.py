@@ -11,7 +11,14 @@ from qcm_pak._types import (
     StepResult,
     SubCycleRun,
 )
-from qcm_pak.kinetics import _bic, _r_squared, fit_etch, fit_langmuir
+from qcm_pak.kinetics import (
+    _bic,
+    _r_squared,
+    fit_etch,
+    fit_etch_per_cycle,
+    fit_langmuir,
+    fit_langmuir_per_cycle,
+)
 from qcm_pak.recipe import PulseStep, Recipe, SubCycle
 
 
@@ -159,3 +166,103 @@ def test_fit_etch_saturating() -> None:
     assert result.r_squared > 0.90
     assert result.k == pytest.approx(k_true, rel=0.3)
     assert result.etch_max == pytest.approx(etch_max_true, rel=0.15)
+
+
+def test_fit_langmuir_per_cycle_returns_one_result_per_occurrence() -> None:
+    recipe = _simple_recipe()
+    rng = np.random.default_rng(3)
+    n = 20
+    steps = [
+        _make_step("A", 30.0, 12.0, k=0.1, theta_max=12.0, outer=i) for i in range(n)
+    ]
+    for s in steps:
+        s.mass_corrected[:] += rng.normal(0, 0.02, size=len(s.time))
+        s.mass_change = float(s.mass_corrected[-1])
+    collection = _make_collection(steps, recipe)
+
+    results = fit_langmuir_per_cycle(collection, step="A", model="mono")
+
+    # Low noise → every cycle should converge
+    assert len(results) == n
+    assert [r.outer_cycle for r in results] == list(range(n))
+    assert all(r.model == "mono" for r in results)
+    # Aggregate across cycles should recover the true parameters
+    k_mean = float(np.mean([r.k for r in results]))
+    theta_mean = float(np.mean([r.theta_max for r in results]))
+    assert k_mean == pytest.approx(0.1, rel=0.3)
+    assert theta_mean == pytest.approx(12.0, rel=0.15)
+
+
+def test_fit_langmuir_per_cycle_no_step_raises() -> None:
+    recipe = _simple_recipe()
+    steps = [_make_step("A", 30.0, 10.0, k=0.1, theta_max=10.0)]
+    collection = _make_collection(steps, recipe)
+    with pytest.raises(ValueError, match="No step named"):
+        fit_langmuir_per_cycle(collection, step="NONEXISTENT")
+
+
+def test_fit_etch_per_cycle_returns_one_result_per_occurrence() -> None:
+    recipe = Recipe(
+        sub_cycles=[SubCycle(steps=[PulseStep("HF", 30.0, 0.1, mass_effect="loss")])],
+        repeats=1,
+    )
+    rng = np.random.default_rng(4)
+    t_max = 30.0
+    k_true, etch_max_true = 0.08, 5.0
+    n = 15
+
+    steps = []
+    for i in range(n):
+        t = np.linspace(0, t_max, 50)
+        e = etch_max_true * (1.0 - np.exp(-k_true * t))
+        e += rng.normal(0, 0.03, size=len(t))
+        steps.append(StepResult(
+            step_name="HF",
+            mass_effect="loss",
+            step_index=0,
+            sub_cycle_index=0,
+            sub_cycle_run=0,
+            outer_cycle=i,
+            time=t,
+            mass_raw=-e,
+            mass_corrected=-e,
+            mass_change=float(-e[-1]),
+        ))
+
+    sub_runs = [SubCycleRun(0, 0, i, [s]) for i, s in enumerate(steps)]
+    cycles_list = [Cycle(i, [sr]) for i, sr in enumerate(sub_runs)]
+    collection = CycleCollection(cycles=cycles_list, recipe=recipe)
+
+    results = fit_etch_per_cycle(collection, step="HF", model="saturating")
+
+    assert len(results) == n
+    assert [r.outer_cycle for r in results] == list(range(n))
+    k_mean = float(np.mean([r.k for r in results]))
+    etch_max_mean = float(np.mean([r.etch_max for r in results]))
+    assert k_mean == pytest.approx(k_true, rel=0.4)
+    assert etch_max_mean == pytest.approx(etch_max_true, rel=0.2)
+
+
+def test_fit_per_cycle_super_cycle_occurrences_are_distinct() -> None:
+    """Same step in two sub-cycles of one outer cycle must not share a key."""
+    recipe = Recipe(
+        sub_cycles=[
+            SubCycle(steps=[PulseStep("A", 0.1, 30.0)], repeats=1),
+            SubCycle(steps=[PulseStep("A", 0.1, 30.0)], repeats=1),
+        ],
+        repeats=2,
+    )
+    cycles = []
+    for outer in range(2):
+        runs = []
+        for sc_idx in range(2):
+            s = _make_step("A", 30.0, 10.0, k=0.1, theta_max=10.0, outer=outer)
+            s.sub_cycle_index = sc_idx
+            runs.append(SubCycleRun(sub_cycle_index=sc_idx, run_number=0, outer_cycle=outer, steps=[s]))
+        cycles.append(Cycle(cycle_number=outer, sub_cycle_runs=runs))
+    collection = CycleCollection(cycles=cycles, recipe=recipe)
+
+    results = fit_langmuir_per_cycle(collection, step="A", model="mono")
+
+    keys = [(r.outer_cycle, r.sub_cycle_index, r.sub_cycle_run) for r in results]
+    assert keys == [(0, 0, 0), (0, 1, 0), (1, 0, 0), (1, 1, 0)]

@@ -53,7 +53,7 @@ def test_temperature_passed_through() -> None:
 
 
 def test_custom_crystal_constants() -> None:
-    crystal = SauerbreyConstants(fundamental_frequency=6.0e6, overtone=1)
+    crystal = SauerbreyConstants(fundamental_frequency=5.0e6, overtone=1)
     ds = _make_dataset(delta_f=-1.0)
     mass_ds = frequency_to_mass(ds, crystal)
     default_mass = frequency_to_mass(ds).mass[-1]

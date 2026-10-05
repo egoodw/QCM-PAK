@@ -47,8 +47,10 @@ class ALDParameters:
 class SauerbreyConstants:
     """Physical properties of the QCM crystal used for frequency-to-mass conversion.
 
-    Defaults correspond to a standard 5 MHz AT-cut quartz crystal at the
-    fundamental frequency. Override if you use a different crystal.
+    Defaults correspond to a 6 MHz AT-cut quartz crystal at the fundamental
+    frequency (C ≈ −12.27 ng/cm²/Hz). Override if you use a different crystal,
+    e.g. ``SauerbreyConstants(fundamental_frequency=5.0e6)`` for 5 MHz
+    (C ≈ −17.7 ng/cm²/Hz).
 
     Parameters
     ----------
@@ -68,7 +70,7 @@ class SauerbreyConstants:
     and the result is in ng/cm² per Hz (C is negative).
     """
 
-    fundamental_frequency: float = 5.0e6   # Hz
+    fundamental_frequency: float = 6.0e6   # Hz
     quartz_density: float = 2.648          # g/cm³
     shear_modulus: float = 2.947e11        # g/(cm·s²)
     overtone: int = 1
@@ -87,7 +89,7 @@ class DetectionParameters:
     """Algorithm tuning knobs for pulse detection.
 
     Default values suit typical ALD QCM datasets acquired at ~1–10 Hz on a
-    5 MHz crystal. Adjust if your instrument has a significantly different
+    5–6 MHz crystal. Adjust if your instrument has a significantly different
     sampling rate or noise floor.
 
     Parameters

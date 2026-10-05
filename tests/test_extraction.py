@@ -117,3 +117,74 @@ def test_time_relative_to_onset(tmp_path) -> None:
 
     for sr in cycles.steps():
         assert sr.time[0] == pytest.approx(0.0, abs=1e-9)
+
+
+def _synthetic_from_recipe(
+    recipe: Recipe, dt: float = 0.5, mass_per_step: float = 1.5
+) -> MassDataset:
+    """Staircase mass trace with one step-up at every recipe event onset."""
+    rng = np.random.default_rng(1)
+    time = np.arange(0, recipe.total_duration + 5.0, dt)
+    mass = np.zeros(len(time))
+    t_cur = recipe.start_time
+    cumulative = 0.0
+    for _ in range(recipe.repeats):
+        for sc in recipe.sub_cycles:
+            for _ in range(sc.repeats):
+                for step in sc.steps:
+                    cumulative += mass_per_step
+                    mass[int(round(t_cur / dt)):] = cumulative
+                    t_cur += step.duration
+    mass += rng.normal(0, 0.01, size=len(mass))
+    return MassDataset(time=time, frequency=np.full(len(time), 5e6), mass=mass)
+
+
+@pytest.mark.parametrize("method", ["hybrid", "pelt_guided"])
+def test_three_step_recipe_keeps_steps_distinct(tmp_path, method) -> None:
+    recipe = Recipe(
+        sub_cycles=[SubCycle(steps=[
+            PulseStep("A", 0.5, 19.5), PulseStep("B", 0.5, 19.5), PulseStep("C", 0.5, 29.5),
+        ])],
+        repeats=6,
+        start_time=10.0,
+    )
+    data = _synthetic_from_recipe(recipe)
+    dummy = tmp_path / "d.csv"
+    dummy.write_text("t,f\n")
+    params = ALDParameters(input_file=dummy, recipe=recipe)
+    index = detect_pulses(data, params, DetectionParameters(method=method, recipe_tolerance=0.3))
+    cycles = extract_cycles(data, index, params)
+
+    assert [name for name, _ in index.step_onsets] == ["A", "B", "C"] * 6
+    true_onsets = 10.0 + np.cumsum([0.0] + [20.0, 20.0, 30.0] * 6)[:-1]
+    detected = data.time[[idx for _, idx in index.step_onsets]]
+    np.testing.assert_allclose(detected, true_onsets, atol=1.5)
+    for name in ("A", "B", "C"):
+        steps = cycles.steps(name=name)
+        assert len(steps) == 6
+        assert [s.outer_cycle for s in steps] == list(range(6))
+
+
+def test_super_cycle_positions(tmp_path) -> None:
+    recipe = Recipe(
+        sub_cycles=[
+            SubCycle(steps=[PulseStep("A", 0.5, 19.5), PulseStep("B", 0.5, 19.5)], repeats=2),
+            SubCycle(steps=[PulseStep("A", 0.5, 19.5), PulseStep("C", 0.5, 29.5)], repeats=3),
+        ],
+        repeats=3,
+        start_time=10.0,
+    )
+    data = _synthetic_from_recipe(recipe)
+    dummy = tmp_path / "d.csv"
+    dummy.write_text("t,f\n")
+    params = ALDParameters(input_file=dummy, recipe=recipe)
+    index = detect_pulses(data, params, DetectionParameters(recipe_tolerance=0.3))
+    cycles = extract_cycles(data, index, params)
+
+    a_steps = cycles.steps(name="A")
+    assert len(a_steps) == 3 * (2 + 3)
+    keys = [(s.outer_cycle, s.sub_cycle_index, s.sub_cycle_run) for s in a_steps]
+    assert len(set(keys)) == len(keys)   # every A occurrence is uniquely addressable
+    assert len(cycles.steps(name="B")) == 3 * 2
+    assert len(cycles.steps(name="C")) == 3 * 3
+    assert all(s.sub_cycle_index == 1 for s in cycles.steps(name="C"))

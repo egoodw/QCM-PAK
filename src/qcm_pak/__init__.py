@@ -38,11 +38,13 @@ from qcm_pak._types import (
     EtchResult,
     LangmuirResult,
     MassDataset,
+    PulseCorrection,
     QCMDataset,
     StepResult,
     SubCycleRun,
 )
 from qcm_pak._version import __version__
+from qcm_pak.corrections import apply_corrections
 from qcm_pak.detection import detect_pulses
 from qcm_pak.exceptions import (
     ConvergenceError,
@@ -50,9 +52,16 @@ from qcm_pak.exceptions import (
     DetectionError,
     QCMPakError,
 )
+from qcm_pak.export import build_analysis_report, save_full_export
 from qcm_pak.extraction import extract_cycles
 from qcm_pak.io import ColumnSpec, load_data
-from qcm_pak.kinetics import fit_etch, fit_langmuir
+from qcm_pak.kinetics import (
+    fit_etch,
+    fit_etch_per_cycle,
+    fit_langmuir,
+    fit_langmuir_per_cycle,
+)
+from qcm_pak.models import MODEL_REGISTRY, ModelSpec, list_models
 from qcm_pak.parameters import (
     ALDParameters,
     DetectionParameters,
@@ -81,6 +90,7 @@ __all__ = [
     "QCMDataset",
     "MassDataset",
     "CycleIndex",
+    "PulseCorrection",
     # Types — results
     "StepResult",
     "SubCycleRun",
@@ -97,9 +107,18 @@ __all__ = [
     "frequency_to_mass",
     "detect_pulses",
     "extract_cycles",
+    "apply_corrections",
     "fit_langmuir",
+    "fit_langmuir_per_cycle",
     "fit_etch",
+    "fit_etch_per_cycle",
     "run_analysis",
+    "save_full_export",
+    "build_analysis_report",
+    # Models
+    "MODEL_REGISTRY",
+    "ModelSpec",
+    "list_models",
     # Submodule
     "visualization",
 ]
