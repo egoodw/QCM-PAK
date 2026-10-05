@@ -2,6 +2,15 @@
 
 All notable changes to QCM-PAK are documented here.
 
+## [Unreleased]
+
+### Changed
+- The default crystal in  is now 6 MHz AT-cut quartz
+  (C = -12.27 ng/cm2/Hz), matching the web analyzer. Pass
+   for a 5 MHz crystal
+  (C = -17.7 ng/cm2/Hz); masses from 5 MHz data analysed with the new default
+  come out about 30% low.
+
 ## [0.1.0] — 2026-07-22
 
 Initial public release.

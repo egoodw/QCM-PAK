@@ -17,7 +17,13 @@ def _simple_recipe() -> Recipe:
 def test_sauerbrey_default_conversion_factor() -> None:
     constants = SauerbreyConstants()
     cf = constants.conversion_factor
-    # Standard 5 MHz AT-cut quartz: C ≈ -17.7 ng/cm²/Hz (Kanazawa-Gordon)
+    # Default 6 MHz AT-cut quartz: C ≈ -12.27 ng/cm²/Hz, the web analyzer's constant
+    assert cf == pytest.approx(-12.27, rel=0.001)
+
+
+def test_sauerbrey_5mhz_conversion_factor() -> None:
+    cf = SauerbreyConstants(fundamental_frequency=5.0e6).conversion_factor
+    # 5 MHz AT-cut quartz: C ≈ -17.7 ng/cm²/Hz (Kanazawa-Gordon)
     assert cf == pytest.approx(-17.7, rel=0.01)
 
 
