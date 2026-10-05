@@ -20,7 +20,8 @@ Public API:
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 from matplotlib.figure import Figure
@@ -344,7 +345,8 @@ def plot_detailed_cycles(
     idx_lo = max(0, idx_lo - pad)
     idx_hi = min(len(data.time) - 1, idx_hi + pad)
 
-    ax.plot(data.time[idx_lo:idx_hi + 1], data.mass[idx_lo:idx_hi + 1], lw=0.8, color="steelblue")
+    window = slice(idx_lo, idx_hi + 1)
+    ax.plot(data.time[window], data.mass[window], lw=0.8, color="steelblue")
 
     unique_names = list(dict.fromkeys(name for name, _ in onsets_window))
     colors = plt.cm.tab10(np.linspace(0, 0.9, max(1, len(unique_names))))  # type: ignore[attr-defined]
@@ -352,7 +354,10 @@ def plot_detailed_cycles(
     first_seen: set[str] = set()
     for step_name, onset_idx in onsets_window:
         label = step_name if step_name not in first_seen else None
-        ax.axvline(data.time[onset_idx], color=color_map[step_name], lw=0.8, alpha=0.8, linestyle="--", label=label)
+        ax.axvline(
+            data.time[onset_idx], color=color_map[step_name],
+            lw=0.8, alpha=0.8, linestyle="--", label=label,
+        )
         first_seen.add(step_name)
     ax.legend(fontsize=8, ncol=min(4, len(unique_names)))
 
@@ -396,7 +401,9 @@ def plot_cycles_batch(
         step_results = [s for s in step_results if lo <= s.outer_cycle < hi]
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    label = f"cycles {cycle_range[0] + 1}-{cycle_range[1]}" if cycle_range else "all cycles"
+    label = (
+        f"cycles {cycle_range[0] + 1}-{cycle_range[1]}" if cycle_range else "all cycles"
+    )
     if not step_results:
         ax.set_title(f"{step} — {label} (no data)")
         fig.tight_layout()
@@ -441,7 +448,9 @@ def plot_cycle_average(
         step_results = [s for s in step_results if lo <= s.outer_cycle < hi]
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    label = f"cycles {cycle_range[0] + 1}-{cycle_range[1]}" if cycle_range else "all cycles"
+    label = (
+        f"cycles {cycle_range[0] + 1}-{cycle_range[1]}" if cycle_range else "all cycles"
+    )
     if not step_results:
         ax.set_title(f"{step} average — {label} (no data)")
         fig.tight_layout()
@@ -453,7 +462,9 @@ def plot_cycle_average(
     mean, std = stack.mean(axis=0), stack.std(axis=0)
 
     ax.plot(t, mean, lw=1.2, color="steelblue", label="mean")
-    ax.fill_between(t, mean - std, mean + std, color="steelblue", alpha=0.25, label="±1σ")
+    ax.fill_between(
+        t, mean - std, mean + std, color="steelblue", alpha=0.25, label="±1σ"
+    )
     ax.set_xlabel("Time in step (s)")
     ax.set_ylabel("Δm (ng/cm²)")
     ax.set_title(f"{step} average — {label} (n={len(step_results)})")
@@ -490,7 +501,9 @@ def plot_pulse_timing(
     """
     import matplotlib.pyplot as plt
 
-    onsets = [(name, idx) for name, idx in index.step_onsets if step is None or name == step]
+    onsets = [
+        (name, idx) for name, idx in index.step_onsets if step is None or name == step
+    ]
     fig, ax = plt.subplots(figsize=(6, 4))
     if len(onsets) < 2:
         ax.set_title("Not enough pulses to plot timing")
@@ -545,7 +558,7 @@ def plot_fit_drift(
     """
     import matplotlib.pyplot as plt
 
-    def _get(r: Mapping[str, Any], key: str) -> Any:
+    def _get(r: Mapping[str, Any], key: str) -> Any:  # noqa: ANN401 (dict or object)
         return r.get(key) if isinstance(r, Mapping) else getattr(r, key, None)
 
     pts = [(_get(r, "outer_cycle"), _get(r, param)) for r in records]

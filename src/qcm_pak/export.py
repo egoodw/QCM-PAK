@@ -16,9 +16,10 @@ Public API:
 from __future__ import annotations
 
 import statistics
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 from qcm_pak._types import CycleCollection, CycleIndex, MassDataset, _write_step_tsv
 from qcm_pak.models import MODEL_REGISTRY
@@ -39,7 +40,7 @@ def build_analysis_report(
     mass_data: MassDataset,
     cycle_index: CycleIndex,
     cycles: CycleCollection,
-    params: "ALDParameters",
+    params: ALDParameters,
     fits: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
 ) -> str:
     """Plain-text summary of a completed analysis.
@@ -75,22 +76,27 @@ def build_analysis_report(
         f"  Manually excluded: {sum(1 for x in cycle_index.excluded if x)}",
     ]
     if cycle_index.confidence:
-        lines.append(f"  Mean confidence: {statistics.mean(cycle_index.confidence):.2f}")
+        mean_conf = statistics.mean(cycle_index.confidence)
+        lines.append(f"  Mean confidence: {mean_conf:.2f}")
         low_conf = sum(1 for c in cycle_index.confidence if c < 0.4)
         lines.append(f"  Low-confidence onsets (<0.40): {low_conf}")
     lines.append("")
 
     lines.append("Extracted cycles:")
     for step_name in recipe.step_names():
-        n = len(cycles.steps(name=step_name, include_excluded=True))
-        n_excl = sum(1 for s in cycles.steps(name=step_name, include_excluded=True) if s.excluded)
+        occurrences = cycles.steps(name=step_name, include_excluded=True)
+        n = len(occurrences)
+        n_excl = sum(1 for s in occurrences if s.excluded)
         lines.append(f"  {step_name}: {n} occurrences ({n_excl} excluded)")
     lines.append("")
 
     lines.append("Fits:" if fits else "Fits: (none run yet)")
     for step_name, step_fits in (fits or {}).items():
         for model_id, fit in step_fits.items():
-            r2 = fit.get("r_squared") if isinstance(fit, Mapping) else getattr(fit, "r_squared", None)
+            r2 = (
+                fit.get("r_squared") if isinstance(fit, Mapping)
+                else getattr(fit, "r_squared", None)
+            )
             lines.append(
                 f"  {step_name} · {model_id}: R²={r2:.4f}" if r2 is not None
                 else f"  {step_name} · {model_id}: (fit failed)"
@@ -109,7 +115,7 @@ def save_full_export(
     mass_data: MassDataset,
     cycle_index: CycleIndex,
     cycles: CycleCollection,
-    params: "ALDParameters",
+    params: ALDParameters,
     fits: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
     fits_per_cycle: Mapping[str, Mapping[str, list[Mapping[str, Any]]]] | None = None,
     cycle_batch_size: int = 100,
@@ -174,8 +180,12 @@ def save_full_export(
 
     # ── Detailed first/middle/last cycle views ───────────────────────────
     for location in ("first", "middle", "last"):
-        fig = viz.plot_detailed_cycles(mass_data, cycle_index, location=location, n_cycles=10)
-        fig.savefig(fig_dir / f"detailed_cycles_{location}.png", dpi=150, bbox_inches="tight")
+        fig = viz.plot_detailed_cycles(
+            mass_data, cycle_index, location=location, n_cycles=10
+        )
+        fig.savefig(
+            fig_dir / f"detailed_cycles_{location}.png", dpi=150, bbox_inches="tight"
+        )
         plt.close(fig)
 
     # ── Cycle-batched overlay / average / timing figures ─────────────────
@@ -190,16 +200,23 @@ def save_full_export(
         batch_dir = fig_dir / f"cycles_{batch_lo + 1:04d}-{batch_hi:04d}"
         batch_dir.mkdir(parents=True, exist_ok=True)
         for step_name in step_names:
-            fig = viz.plot_cycles_batch(cycles, step_name, cycle_range=(batch_lo, batch_hi))
-            fig.savefig(batch_dir / f"{step_name}_cycles.png", dpi=150, bbox_inches="tight")
+            batch = (batch_lo, batch_hi)
+            fig = viz.plot_cycles_batch(cycles, step_name, cycle_range=batch)
+            fig.savefig(
+                batch_dir / f"{step_name}_cycles.png", dpi=150, bbox_inches="tight"
+            )
             plt.close(fig)
 
-            fig = viz.plot_cycle_average(cycles, step_name, cycle_range=(batch_lo, batch_hi))
-            fig.savefig(batch_dir / f"{step_name}_average.png", dpi=150, bbox_inches="tight")
+            fig = viz.plot_cycle_average(cycles, step_name, cycle_range=batch)
+            fig.savefig(
+                batch_dir / f"{step_name}_average.png", dpi=150, bbox_inches="tight"
+            )
             plt.close(fig)
 
             fig = viz.plot_pulse_timing(cycle_index, mass_data, step=step_name)
-            fig.savefig(batch_dir / f"{step_name}_timing.png", dpi=150, bbox_inches="tight")
+            fig.savefig(
+                batch_dir / f"{step_name}_timing.png", dpi=150, bbox_inches="tight"
+            )
             plt.close(fig)
 
     # ── Per-model fit plots + per-cycle drift plots ───────────────────────
@@ -217,16 +234,23 @@ def save_full_export(
                         fig = viz.plot_etch(cycles, ns)
                     else:
                         continue
-                    fig.savefig(model_dir / f"{step_name}_{model_id}.png", dpi=150, bbox_inches="tight")
+                    fig.savefig(
+                        model_dir / f"{step_name}_{model_id}.png",
+                        dpi=150, bbox_inches="tight",
+                    )
                     plt.close(fig)
                 except Exception:
-                    pass  # a single failed/degenerate fit shouldn't abort the whole export
+                    # a single failed/degenerate fit shouldn't abort the whole export
+                    pass
 
                 records = fits_per_cycle.get(step_name, {}).get(model_id)
                 if records:
                     for param in _DRIFT_PARAMS.get(model_id, []):
                         fig = viz.plot_fit_drift(records, step_name, param=param)
-                        fig.savefig(model_dir / f"{step_name}_{model_id}_{param}_drift.png", dpi=150, bbox_inches="tight")
+                        fig.savefig(
+                            model_dir / f"{step_name}_{model_id}_{param}_drift.png",
+                            dpi=150, bbox_inches="tight",
+                        )
                         plt.close(fig)
 
     # ── TSVs ───────────────────────────────────────────────────────────
@@ -235,7 +259,10 @@ def save_full_export(
         if step_results:
             _write_step_tsv(step_results, data_dir / f"cycle_data_{step_name}.tsv")
 
-        onset_times = [mass_data.time[idx] for name, idx in cycle_index.step_onsets if name == step_name]
+        onset_times = [
+            mass_data.time[idx]
+            for name, idx in cycle_index.step_onsets if name == step_name
+        ]
         all_results = cycles.steps(name=step_name, include_excluded=True)
         if onset_times and len(onset_times) == len(all_results):
             rows = [
@@ -247,12 +274,16 @@ def save_full_export(
                 }
                 for sr, t in zip(all_results, onset_times)
             ]
-            pd.DataFrame(rows).to_csv(data_dir / f"pulse_times_{step_name}.tsv", sep="\t", index=False)
+            pd.DataFrame(rows).to_csv(
+                data_dir / f"pulse_times_{step_name}.tsv", sep="\t", index=False
+            )
 
         for model_id, records in fits_per_cycle.get(step_name, {}).items():
             if records:
                 pd.DataFrame(list(records)).to_csv(
-                    data_dir / f"{step_name}_{model_id}_per_cycle.tsv", sep="\t", index=False
+                    data_dir / f"{step_name}_{model_id}_per_cycle.tsv",
+                    sep="\t",
+                    index=False,
                 )
 
     confidence = cycle_index.confidence

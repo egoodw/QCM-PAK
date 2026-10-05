@@ -162,13 +162,16 @@ def fit_langmuir_per_cycle(
         theta = np.abs(sr.mass_corrected).astype(np.float64)
         try:
             if model == "bi":
-                result = _fit_langmuir_bi(step, t, theta, k_bounds, theta_bounds, force=force)
+                result = _fit_langmuir_bi(
+                    step, t, theta, k_bounds, theta_bounds, force=force
+                )
             else:
                 result = _fit_langmuir_mono(step, t, theta, k_bounds, theta_bounds)
         except ConvergenceError as exc:
             warnings.warn(
                 f"Per-cycle Langmuir fit skipped for '{step}' "
-                f"(outer_cycle={sr.outer_cycle}, sub_cycle_run={sr.sub_cycle_run}): {exc}",
+                f"(outer_cycle={sr.outer_cycle}, "
+                f"sub_cycle_run={sr.sub_cycle_run}): {exc}",
                 UserWarning,
                 stacklevel=2,
             )
@@ -478,7 +481,8 @@ def fit_etch_per_cycle(
         except ConvergenceError as exc:
             warnings.warn(
                 f"Per-cycle etch fit skipped for '{step}' "
-                f"(outer_cycle={sr.outer_cycle}, sub_cycle_run={sr.sub_cycle_run}): {exc}",
+                f"(outer_cycle={sr.outer_cycle}, "
+                f"sub_cycle_run={sr.sub_cycle_run}): {exc}",
                 UserWarning,
                 stacklevel=2,
             )

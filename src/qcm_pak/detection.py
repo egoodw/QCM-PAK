@@ -225,8 +225,10 @@ def _assign_candidates(
     tol_samples_list: list[int] = []
     for event in timeline:
         tol_seconds = event.step_duration * tolerance
-        lo = int(np.clip(np.searchsorted(time, event.expected_time - tol_seconds), 0, n - 1))
-        hi = int(np.clip(np.searchsorted(time, event.expected_time + tol_seconds), 0, n - 1))
+        t_lo = event.expected_time - tol_seconds
+        t_hi = event.expected_time + tol_seconds
+        lo = int(np.clip(np.searchsorted(time, t_lo), 0, n - 1))
+        hi = int(np.clip(np.searchsorted(time, t_hi), 0, n - 1))
         hi = max(hi, lo)
         windows.append((lo, hi))
         tol_samples_list.append(max(1, hi - lo))
@@ -366,8 +368,10 @@ def _detect_hybrid(
         # Additive tolerance: ±(tol × step_duration), located directly in
         # the time array rather than converted through a global dt.
         tol_seconds = event.step_duration * det.recipe_tolerance
-        lo = int(np.clip(np.searchsorted(time, event.expected_time - tol_seconds), 0, n - 1))
-        hi = int(np.clip(np.searchsorted(time, event.expected_time + tol_seconds), 0, n - 1))
+        t_lo = event.expected_time - tol_seconds
+        t_hi = event.expected_time + tol_seconds
+        lo = int(np.clip(np.searchsorted(time, t_lo), 0, n - 1))
+        hi = int(np.clip(np.searchsorted(time, t_hi), 0, n - 1))
         hi = max(hi, lo)
 
         # Baseline window: go back one full step duration before the search
@@ -419,7 +423,9 @@ def _detect_hybrid(
         # How far the derivative peak clears the adaptive threshold — a peak
         # well above threshold is a confident detection, one below it (the
         # warning case above) is not.
-        confidence.append(float(np.clip(peak / threshold, 0.15, 1.0)) if threshold > 0 else 0.5)
+        confidence.append(
+            float(np.clip(peak / threshold, 0.15, 1.0)) if threshold > 0 else 0.5
+        )
 
     _check_count(onsets, params.recipe)
     return CycleIndex(step_onsets=onsets, recipe=params.recipe, confidence=confidence)

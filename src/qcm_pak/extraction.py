@@ -150,7 +150,9 @@ def _baseline_correct(
     time = data.time
     if onset_idx > 0:
         baseline_start_time = time[onset_idx] - _BASELINE_PRE_PULSE_S
-        baseline_start = int(np.clip(np.searchsorted(time, baseline_start_time), 0, onset_idx))
+        baseline_start = int(
+            np.clip(np.searchsorted(time, baseline_start_time), 0, onset_idx)
+        )
     else:
         baseline_start = 0
     baseline = float(np.mean(mass[baseline_start:onset_idx])) if onset_idx > 0 else 0.0
