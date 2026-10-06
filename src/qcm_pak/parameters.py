@@ -118,13 +118,17 @@ class DetectionParameters:
         Derivative threshold multiplier for precursor-B pulses (hybrid only).
     adaptive_threshold_sigma:
         Number of standard deviations above baseline for adaptive threshold
-        (hybrid only).
+        (hybrid only). Onset refinement uses the same multiple of the raw-mass
+        noise to decide where the rise begins.
     refinement_window:
-        Local search window in seconds around a candidate onset for refinement
-        (hybrid only).
+        Half-width in seconds of the window around each derivative peak in
+        which the onset is refined back to the last sample on the pre-pulse
+        baseline (hybrid only). ``0`` disables refinement and keeps the
+        derivative peak, which lands late on fast or smoothed rises.
     baseline_window:
         Pre-pulse window in seconds used to estimate local baseline for
-        adaptive threshold (hybrid only).
+        adaptive threshold, and the quiet stretch that onset refinement fits
+        its baseline line to (hybrid only).
     min_snr:
         Minimum signal-to-noise ratio for accepting a detected pulse
         (hybrid only).
@@ -155,4 +159,9 @@ class DetectionParameters:
         if self.min_pulse_spacing < 1:
             raise ValueError(
                 f"min_pulse_spacing must be >= 1, got {self.min_pulse_spacing}"
+            )
+        if self.refinement_window < 0:
+            raise ValueError(
+                f"refinement_window must be >= 0 (0 disables refinement), "
+                f"got {self.refinement_window}"
             )
