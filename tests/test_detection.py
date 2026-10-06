@@ -228,3 +228,114 @@ def test_detect_pulses_rejects_unsorted_time(tmp_path: pathlib.Path) -> None:
 
     with pytest.raises(DetectionError, match="not sorted"):
         detect_pulses(bad, params, DetectionParameters(method="hybrid"))
+
+
+# ── Hybrid onset refinement ───────────────────────────────────────────────────
+
+
+def _langmuir_run(
+    n_cycles: int = 12,
+    dt: float = 0.1,
+    start_time: float = 20.0,
+    steps: tuple[tuple[str, float, float, float, float], ...] = (
+        ("TMA", 0.5, 25.0, 38.0, 8.0),    # name, pulse, purge, theta, k
+        ("H2O", 0.5, 25.0, -6.0, 6.0),
+    ),
+    noise: float = 0.6,
+    drift: float = 0.0,
+    seed: int = 3,
+) -> tuple[MassDataset, Recipe, list[int]]:
+    """A physically sampled ALD run: each pulse adds theta*(1 - exp(-k*t)) while
+    the gas flows, so the onset sample itself is still on the baseline (the
+    convention extraction relies on). Also returns the true onset indices."""
+    rng = np.random.default_rng(seed)
+    period = sum(p + q for _, p, q, _, _ in steps)
+    time = np.round(np.arange(0, start_time + period * n_cycles + 10.0, dt), 6)
+    mass = drift * time
+    true: list[int] = []
+    t_on = start_time
+    for _ in range(n_cycles):
+        for _name, pulse, purge, theta, k in steps:
+            te = np.clip(time - t_on, 0, pulse)
+            mass = mass + theta * (1 - np.exp(-k * te)) * (time >= t_on)
+            true.append(int(np.searchsorted(time, t_on - 1e-9)))
+            t_on += pulse + purge
+    mass = mass + rng.normal(0, noise, len(time))
+    recipe = Recipe(
+        sub_cycles=[SubCycle(steps=[
+            PulseStep(name, pulse=p, purge=q, mass_effect="gain" if th > 0 else "loss")
+            for name, p, q, th, _ in steps
+        ])],
+        repeats=n_cycles,
+        start_time=start_time,
+    )
+    data = MassDataset(time=time, frequency=np.full(len(time), 6e6), mass=mass)
+    return data, recipe, true
+
+
+def _onset_errors(
+    data: MassDataset,
+    recipe: Recipe,
+    true: list[int],
+    tmp_path: pathlib.Path,
+    **det_kwargs: float,
+) -> np.ndarray:
+    dummy = tmp_path / "dummy.csv"
+    dummy.write_text("t,f\n")
+    params = ALDParameters(input_file=dummy, recipe=recipe)
+    det = DetectionParameters(method="hybrid", **det_kwargs)  # type: ignore[arg-type]
+    index = detect_pulses(data, params, det)
+    return np.array([idx for _, idx in index.step_onsets]) - np.array(true)
+
+
+def test_hybrid_onsets_land_on_the_last_baseline_sample(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A fast precursor (k = 8 s^-1) is mostly adsorbed within two samples, so
+    an onset even one sample late cuts most of the uptake out of the step and
+    the Langmuir fit collapses. Refined onsets must be sample-exact."""
+    data, recipe, true = _langmuir_run()
+    err = _onset_errors(data, recipe, true, tmp_path)
+    precursor, coreactant = err[0::2], err[1::2]
+    assert np.mean(precursor == 0) >= 0.9
+    assert np.all(np.abs(precursor) <= 2)
+    assert np.all(np.abs(coreactant) <= 3)
+
+
+def test_hybrid_refinement_fixes_the_late_derivative_peak(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Without refinement the smoothed-derivative peak sits after the onset."""
+    slow = (("TEOS", 10.0, 30.0, 32.0, 0.8), ("O3", 3.0, 30.0, -9.0, 1.0))
+    data, recipe, true = _langmuir_run(steps=slow, n_cycles=6)
+    coarse = _onset_errors(data, recipe, true, tmp_path, refinement_window=0)
+    refined = _onset_errors(data, recipe, true, tmp_path)
+    assert np.mean(coarse[0::2]) > 2            # late by several samples
+    assert np.all(np.abs(refined[0::2]) <= 1)
+
+
+def test_hybrid_refinement_follows_a_drifting_baseline(tmp_path: pathlib.Path) -> None:
+    """A slow thermal drift tilts the pre-pulse baseline; the refinement fits a
+    line to it rather than a constant, so onsets stay put."""
+    data, recipe, true = _langmuir_run(drift=0.02)
+    err = _onset_errors(data, recipe, true, tmp_path)
+    assert np.mean(err[0::2] == 0) >= 0.9
+    assert np.all(np.abs(err) <= 3)
+
+
+def test_hybrid_refined_onsets_give_a_good_langmuir_fit(tmp_path: pathlib.Path) -> None:
+    """End to end: hybrid detection -> extraction -> fit recovers the uptake."""
+    from qcm_pak.extraction import extract_cycles
+    from qcm_pak.kinetics import fit_langmuir
+
+    data, recipe, _ = _langmuir_run()
+    dummy = tmp_path / "dummy.csv"
+    dummy.write_text("t,f\n")
+    params = ALDParameters(input_file=dummy, recipe=recipe)
+    index = detect_pulses(data, params, DetectionParameters(method="hybrid"))
+    cycles = extract_cycles(data, index, params)
+    np.random.seed(0)
+    fit = fit_langmuir(cycles, step="TMA", model="mono")
+    assert fit.r_squared > 0.98
+    assert abs(fit.theta_max - 38.0 * (1 - np.exp(-8.0 * 0.5))) < 1.5
+    assert 6.0 < fit.k < 10.0

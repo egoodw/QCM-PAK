@@ -53,3 +53,9 @@ def test_detection_parameters_invalid_tolerance() -> None:
 def test_detection_parameters_invalid_spacing() -> None:
     with pytest.raises(ValueError, match="min_pulse_spacing"):
         DetectionParameters(min_pulse_spacing=0)
+
+
+def test_detection_parameters_invalid_refinement_window() -> None:
+    with pytest.raises(ValueError, match="refinement_window"):
+        DetectionParameters(refinement_window=-0.5)
+    assert DetectionParameters(refinement_window=0).refinement_window == 0
