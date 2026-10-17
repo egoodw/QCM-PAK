@@ -323,6 +323,15 @@ def test_hybrid_refinement_follows_a_drifting_baseline(tmp_path: pathlib.Path) -
     assert np.all(np.abs(err) <= 3)
 
 
+def test_hybrid_refinement_at_a_low_sample_rate(tmp_path: pathlib.Path) -> None:
+    """At 1 Hz a few seconds of baseline is only a handful of samples, too few
+    to estimate the noise; an underestimated noise lets a pre-pulse sample pass
+    for the start of the rise. Refined onsets must stay within a sample."""
+    data, recipe, true = _langmuir_run(dt=1.0, n_cycles=30, seed=7)
+    err = _onset_errors(data, recipe, true, tmp_path)
+    assert np.all(np.abs(err) <= 1)
+
+
 def test_hybrid_refined_onsets_give_a_good_langmuir_fit(tmp_path: pathlib.Path) -> None:
     """End to end: hybrid detection -> extraction -> fit recovers the uptake."""
     from qcm_pak.extraction import extract_cycles
