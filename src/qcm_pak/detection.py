@@ -17,7 +17,10 @@ Two algorithms are provided:
     window (derived from the recipe timeline and ``recipe_tolerance``), a
     smoothed first-derivative peak is located within the window. Falls back
     to the maximum-derivative sample when no peak exceeds the adaptive
-    threshold. This matches the algorithm used in QCMPy 0.5.
+    threshold. The peak marks the steepest part of the rise, so each onset is
+    then refined against the raw mass, back to the last sample on the
+    pre-pulse baseline (``refinement_window``). This matches the algorithm
+    used in QCMPy 0.5, including its onset refinement.
 
 Both algorithms return a :class:`~qcm_pak._types.CycleIndex` with exactly
 ``recipe.total_events`` detected onsets, or raise
@@ -360,6 +363,9 @@ def _detect_hybrid(
     deriv = np.gradient(smooth, time)
 
     timeline = _build_timeline(params.recipe, data)
+    # Per-sample noise of the raw mass, for onset refinement: the MAD of first
+    # differences estimates sqrt(2) times it and ignores the few large steps.
+    noise_floor = _estimate_noise(mass) / np.sqrt(2)
 
     onsets: list[tuple[str, int]] = []
     confidence: list[float] = []
@@ -402,11 +408,13 @@ def _detect_hybrid(
         else:
             scored = segment   # gain or any → look for positive derivative spike
 
-        # Peak of the signed derivative is the onset estimate.
+        # Peak of the signed derivative locates the pulse coarsely.
         # First-crossing is avoided: SG pre-ringing causes the derivative to
         # rise 20-25 samples before the actual step, so "first above threshold"
-        # is systematically early. The argmax is unbiased and also degrades
-        # more gracefully under low-SNR conditions.
+        # is systematically early. The argmax is robust under low SNR, but it
+        # marks the steepest part of the rise, which comes after the onset —
+        # late by up to a second for slow or smoothed rises — so it is refined
+        # below against the raw mass.
         best_local = int(np.argmax(scored))
         peak = float(scored[best_local])
         if peak < threshold:
@@ -419,7 +427,12 @@ def _detect_hybrid(
                 stacklevel=3,
             )
 
-        onsets.append((event.step_name, lo + best_local))
+        lower = onsets[-1][1] + 1 if onsets else 0
+        sign = -1.0 if event.mass_effect == "loss" else 1.0
+        onset = _refine_onset(
+            time, mass, lo + best_local, sign, lower, det, noise_floor
+        )
+        onsets.append((event.step_name, onset))
         # How far the derivative peak clears the adaptive threshold — a peak
         # well above threshold is a confident detection, one below it (the
         # warning case above) is not.
@@ -429,6 +442,98 @@ def _detect_hybrid(
 
     _check_count(onsets, params.recipe)
     return CycleIndex(step_onsets=onsets, recipe=params.recipe, confidence=confidence)
+
+
+# Fewest samples onset refinement fits its baseline line to. Fewer give a slope
+# and noise estimate too rough to tell the start of a rise from a noisy sample.
+_MIN_BASELINE_SAMPLES = 15
+
+
+def _refine_onset(
+    time: NDArray[np.float64],
+    mass: NDArray[np.float64],
+    peak_idx: int,
+    sign: float,
+    lower: int,
+    det: DetectionParameters,
+    noise_floor: float = 0.0,
+) -> int:
+    """Move a coarse derivative-peak onset back to where the rise begins.
+
+    The raw mass is compared with a straight-line baseline fitted to the
+    ``det.baseline_window`` seconds before the ±``det.refinement_window``
+    window around ``peak_idx`` (the line absorbs slow drift), widened to at
+    least ``_MIN_BASELINE_SAMPLES`` samples at low sample rates. The rise is
+    first located as the first of two consecutive samples in that window more
+    than ``det.adaptive_threshold_sigma`` noise standard deviations off the
+    baseline in the direction ``sign`` (+1 gain, -1 loss). The noise is the
+    scatter about the line, but never less than ``noise_floor`` (the
+    trace-wide estimate): a short baseline that happens to be quiet would
+    otherwise let a noisy pre-pulse sample pass for the rise. The onset is then
+    the corner of a hinge — flat on the baseline, then a straight rise — fitted
+    to the samples up to that first risen one, over candidate corners up to
+    ``refinement_window`` seconds earlier. Ending the fit at the first risen
+    sample keeps a fast, sharply curving rise from biasing the corner early;
+    fitting it at all keeps a slow rise, whose first samples barely clear the
+    noise, from biasing it late. The onset sample sits on the pre-pulse
+    baseline — the convention extraction relies on (``mass_corrected[0] ≈ 0``).
+
+    Returns ``peak_idx`` unchanged when refinement is disabled
+    (``refinement_window == 0``), when there are fewer than
+    ``_MIN_BASELINE_SAMPLES`` quiet samples before the window to fit a
+    baseline, or when no departure is found.
+    Never returns an index below ``lower`` (keeps onsets strictly increasing).
+    """
+    if det.refinement_window <= 0:
+        return peak_idx
+    n = len(time)
+    t_peak = time[peak_idx]
+    start = max(int(np.searchsorted(time, t_peak - det.refinement_window)), lower)
+    stop = min(int(np.searchsorted(time, t_peak + det.refinement_window)), n - 2)
+    t_base_start = time[start] - det.baseline_window
+    base_start = int(np.searchsorted(time, t_base_start))
+    # At low sample rates the baseline window holds only a few samples, which
+    # underestimates the noise and lets a pre-pulse sample pass for the start
+    # of the rise; widen it to a minimum number of samples.
+    base_start = max(min(base_start, start - _MIN_BASELINE_SAMPLES), lower)
+    if start - base_start < _MIN_BASELINE_SAMPLES or stop <= start:
+        return peak_idx
+
+    t_base = time[base_start:start] - time[base_start]
+    m_base = mass[base_start:start]
+    if np.ptp(t_base) > 0:
+        slope, intercept = np.polyfit(t_base, m_base, 1)
+    else:
+        slope, intercept = 0.0, float(np.mean(m_base))
+    # ddof=2: the line's slope and intercept were fitted to these samples.
+    sigma = float(np.std(m_base - (intercept + slope * t_base), ddof=2))
+    sigma = max(sigma, noise_floor)
+    if sigma <= 0:
+        return peak_idx
+
+    # Offset from the baseline (positive = in the expected direction), from the
+    # start of the baseline stretch so the corner can sit before ``start``.
+    t_all = time[base_start : stop + 2] - time[base_start]
+    off = sign * (mass[base_start : stop + 2] - (intercept + slope * t_all))
+    w0 = start - base_start
+    k = det.adaptive_threshold_sigma
+    departed = (off[w0:-1] > k * sigma) & (off[w0 + 1 :] > k * sigma)
+    if not departed.any():
+        return peak_idx
+    first = w0 + int(np.argmax(departed))    # first clearly-risen sample
+
+    j0 = int(np.searchsorted(t_all, t_all[first] - det.refinement_window))
+    best_sse, corner = np.inf, first - 1
+    for j in range(min(j0, first - 1), first):
+        dt_rise = t_all[j + 1 : first + 1] - t_all[j]
+        rise = off[j + 1 : first + 1]
+        denom = float(dt_rise @ dt_rise)
+        rate = float(dt_rise @ rise) / denom if denom > 0 else 0.0
+        flat = off[j0 : j + 1]
+        sse = float(flat @ flat) + float(np.sum((rise - rate * dt_rise) ** 2))
+        if sse < best_sse:
+            best_sse, corner = sse, j
+    return max(base_start + corner, lower)
 
 
 # ── Shared validation ─────────────────────────────────────────────────────────
