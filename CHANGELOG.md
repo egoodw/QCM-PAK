@@ -16,6 +16,14 @@ All notable changes to QCM-PAK are documented here.
   `DetectionParameters.refinement_window` sets how far the onset may move
   (default 1.0 s); set it to 0 for the previous onsets.
 
+### Fixed
+- Figures no longer pile up in memory in long-running processes such as the
+  web app. The plot functions in `qcm_pak.visualization` now build figures
+  without pyplot, so each one is freed when it is no longer used, and
+  `AnalysisResult.save()` no longer leaves two figures open per call. The
+  figures look the same, but `plt.show()` no longer displays them: save them
+  with `fig.savefig()`, or show them in a notebook as a cell's last expression.
+
 ## [0.1.0] — 2026-07-22
 
 Initial public release.
