@@ -20,15 +20,16 @@ Top-level container:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
 from qcm_pak.recipe import Recipe
+from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 if TYPE_CHECKING:
     from qcm_pak.parameters import ALDParameters
@@ -83,6 +84,10 @@ class QCMDataset:
     def duration(self) -> float:
         """Total measurement duration in seconds."""
         return float(self.time[-1] - self.time[0])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: arrays become lists, NaN becomes None."""
+        return dataclass_to_dict(self)
 
 
 @dataclass
@@ -164,6 +169,10 @@ class MassDataset:
                 "selected during import."
             )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: arrays become lists, NaN becomes None."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class CycleIndex:
@@ -204,6 +213,10 @@ class CycleIndex:
         """Number of detected pulse events."""
         return len(self.step_onsets)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; each onset becomes ``[step_name, index]``."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class PulseCorrection:
@@ -228,6 +241,18 @@ class PulseCorrection:
     pulse_id: int
     new_onset_idx: int | None = None
     excluded: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> PulseCorrection:
+        """Build a PulseCorrection from a dict such as :meth:`to_dict` returns.
+
+        Raises ``ValueError`` for unknown or missing keys.
+        """
+        return cls(**dataclass_kwargs(cls, data))
 
 
 # ── Analysis results (three levels) ──────────────────────────────────────────
@@ -281,6 +306,10 @@ class StepResult:
     mass_change: float
     excluded: bool = False
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: arrays become lists, NaN becomes None."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class SubCycleRun:
@@ -312,6 +341,10 @@ class SubCycleRun:
         """Net mass change across all steps in this SubCycle run (ng/cm²)."""
         return sum(s.mass_change for s in self.steps)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict, with each step as a nested dict."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class Cycle:
@@ -335,6 +368,10 @@ class Cycle:
     def net_mass_change(self) -> float:
         """Net mass change across all sub-cycles in this outer cycle (ng/cm²)."""
         return sum(scr.total_mass_change for scr in self.sub_cycle_runs)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict, with each sub-cycle run as a nested dict."""
+        return dataclass_to_dict(self)
 
 
 @dataclass
@@ -423,6 +460,14 @@ class CycleCollection:
             all_steps = [s for s in all_steps if s.sub_cycle_index == sub_cycle]
         return all_steps
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: ``{"cycles": [...], "recipe": {...}}``.
+
+        Includes every step, excluded ones too, with its full time and mass
+        arrays.
+        """
+        return dataclass_to_dict(self)
+
 
 # ── Kinetics results ──────────────────────────────────────────────────────────
 
@@ -477,6 +522,13 @@ class LangmuirResult:
     sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: NaN becomes None, covariance a nested list.
+
+        :func:`~qcm_pak.export.save_full_export` accepts the result as a fit.
+        """
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class EtchResult:
@@ -525,6 +577,13 @@ class EtchResult:
     sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: NaN becomes None, covariance a nested list.
+
+        :func:`~qcm_pak.export.save_full_export` accepts the result as a fit.
+        """
+        return dataclass_to_dict(self)
+
 
 # ── Top-level result container ────────────────────────────────────────────────
 
@@ -552,6 +611,15 @@ class AnalysisResult:
     mass_data: MassDataset
     cycle_index: CycleIndex
     params: ALDParameters
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the whole result to a JSON-safe dict.
+
+        Keys are ``cycles``, ``mass_data``, ``cycle_index`` and ``params``,
+        each as its own ``to_dict()`` returns it. Arrays become lists, so for
+        a long run this is large. Figures are not included.
+        """
+        return dataclass_to_dict(self)
 
     def save(self, output_dir: str | Path) -> None:
         """Write analysis outputs to ``output_dir``.

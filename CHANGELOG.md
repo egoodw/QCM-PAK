@@ -4,6 +4,23 @@ All notable changes to QCM-PAK are documented here.
 
 ## [Unreleased]
 
+### Added
+- `to_dict()` on every data and result class: `Recipe`, `SubCycle`,
+  `PulseStep`, `ColumnSpec`, `SauerbreyConstants`, `DetectionParameters`,
+  `ALDParameters`, `QCMDataset`, `MassDataset`, `CycleIndex`,
+  `PulseCorrection`, `StepResult`, `SubCycleRun`, `Cycle`, `CycleCollection`,
+  `LangmuirResult`, `EtchResult`, `AnalysisResult` and `ModelSpec` (which
+  leaves out its fit functions). The output is strict JSON: arrays become
+  lists and NaN or infinity become `None`. Fit results converted this way
+  can be passed straight to `save_full_export()`.
+- `from_dict()` on the settings classes (`Recipe`, `SubCycle`, `PulseStep`,
+  `ColumnSpec`, `SauerbreyConstants`, `DetectionParameters`,
+  `ALDParameters`) and on `PulseCorrection`, so a run can be set up from
+  JSON. Missing optional keys keep their defaults; unknown or missing
+  required keys raise `ValueError` naming them.
+- `qcm_pak.serialization`, with `to_jsonable()` for converting dicts and
+  lists of results in one go.
+
 ### Changed
 - The default crystal in  is now 6 MHz AT-cut quartz
   (C = -12.27 ng/cm2/Hz), matching the web analyzer. Pass

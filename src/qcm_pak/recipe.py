@@ -51,8 +51,11 @@ ALE with two loss steps::
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
+
+from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 
 @dataclass
@@ -93,6 +96,18 @@ class PulseStep:
         """Total step duration (pulse + purge) in seconds."""
         return self.pulse + self.purge
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> PulseStep:
+        """Build a PulseStep from a dict such as :meth:`to_dict` returns.
+
+        Raises ``ValueError`` for unknown or missing keys.
+        """
+        return cls(**dataclass_kwargs(cls, data))
+
 
 @dataclass
 class SubCycle:
@@ -127,6 +142,20 @@ class SubCycle:
     def total_duration(self) -> float:
         """Total duration of all repeats of this SubCycle in seconds."""
         return self.duration * self.repeats
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SubCycle:
+        """Build a SubCycle, and its steps, from a dict such as :meth:`to_dict` returns.
+
+        Raises ``ValueError`` for unknown or missing keys.
+        """
+        kwargs = dataclass_kwargs(cls, data)
+        kwargs["steps"] = [PulseStep.from_dict(s) for s in kwargs["steps"]]
+        return cls(**kwargs)
 
 
 @dataclass
@@ -222,3 +251,18 @@ class Recipe:
                 if s.name not in seen:
                     seen.append(s.name)
         return seen
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Recipe:
+        """Build a Recipe, with its sub-cycles and steps, from a dict.
+
+        Takes the shape :meth:`to_dict` returns. Raises ``ValueError`` for
+        unknown or missing keys at any level.
+        """
+        kwargs = dataclass_kwargs(cls, data)
+        kwargs["sub_cycles"] = [SubCycle.from_dict(sc) for sc in kwargs["sub_cycles"]]
+        return cls(**kwargs)

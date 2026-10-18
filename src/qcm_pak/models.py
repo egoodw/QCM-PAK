@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 
 from qcm_pak._types import EtchResult, LangmuirResult
 from qcm_pak.kinetics import (
@@ -68,6 +68,19 @@ class ModelSpec:
     mass_effect: Literal["gain", "loss"]
     fit: Callable[..., LangmuirResult | EtchResult]
     fit_per_cycle: Callable[..., list[LangmuirResult | EtchResult]]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Describe this model as a JSON-safe dict, e.g. for a model picker.
+
+        Holds ``id``, ``display_name``, ``category`` and ``mass_effect``; the
+        fit functions are left out.
+        """
+        return {
+            "id": self.id,
+            "display_name": self.display_name,
+            "category": self.category,
+            "mass_effect": self.mass_effect,
+        }
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
