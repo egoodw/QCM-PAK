@@ -31,6 +31,8 @@ from numpy.typing import NDArray
 from qcm_pak.recipe import Recipe
 
 if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+
     from qcm_pak.parameters import ALDParameters
 
 
@@ -534,7 +536,8 @@ class AnalysisResult:
     """Container returned by :func:`~qcm_pak.pipeline.run_analysis`.
 
     All intermediate results are accessible as plain Python objects for
-    downstream computation. Call :meth:`save` to write files to disk.
+    downstream computation. Call :meth:`save` to write files to disk, or
+    :meth:`to_bytes` to get the same files in memory.
 
     Parameters
     ----------
@@ -576,40 +579,62 @@ class AnalysisResult:
         output_dir:
             Directory to write outputs into. Created if it does not exist.
         """
+        out = Path(output_dir)
+        (out / "data").mkdir(parents=True, exist_ok=True)
+        (out / "figures").mkdir(parents=True, exist_ok=True)
+        for name, content in self.to_bytes().items():
+            (out / name).write_bytes(content)
+
+    def to_bytes(self) -> dict[str, bytes]:
+        """Produce the files :meth:`save` writes, in memory.
+
+        Nothing touches the disk, so a server can return or zip the files
+        without a temporary directory per request.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Relative path, as :meth:`save` lays it out (for example
+            ``"data/cycle_data_TMA.tsv"`` or ``"figures/full_trace.png"``),
+            mapped to the file's contents. Writing each entry under a
+            directory gives byte-for-byte what :meth:`save` writes there.
+        """
         from qcm_pak import visualization
 
-        out = Path(output_dir)
-        data_dir = out / "data"
-        fig_dir = out / "figures"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        fig_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write per-step TSV files
+        files: dict[str, bytes] = {}
         for step_name in self.cycles.recipe.step_names():
             step_results = self.cycles.steps(name=step_name)
             if not step_results:
                 continue
-            _write_step_tsv(step_results, data_dir / f"cycle_data_{step_name}.tsv")
+            files[f"data/cycle_data_{step_name}.tsv"] = _step_tsv_bytes(step_results)
 
-        # Write diagnostic figures
-        trace_fig = visualization.plot_trace(self.mass_data, self.cycle_index)
-        trace_fig.savefig(fig_dir / "full_trace.png", dpi=150, bbox_inches="tight")
-        trace_fig.clf()
-
-        deriv_fig = visualization.plot_derivative(self.mass_data)
-        deriv_fig.savefig(
-            fig_dir / "derivative_analysis.png", dpi=150, bbox_inches="tight"
+        files["figures/full_trace.png"] = _png_bytes(
+            visualization.plot_trace(self.mass_data, self.cycle_index)
         )
-        deriv_fig.clf()
+        files["figures/derivative_analysis.png"] = _png_bytes(
+            visualization.plot_derivative(self.mass_data)
+        )
+        return files
 
 
-def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
-    """Write a collection of StepResults to a TSV file.
+def _png_bytes(fig: Figure) -> bytes:
+    """Render ``fig`` as PNG with the settings :meth:`AnalysisResult.save` uses."""
+    import io
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    return buf.getvalue()
+
+
+def _step_tsv_bytes(steps: list[StepResult]) -> bytes:
+    """Format a collection of StepResults as a UTF-8 TSV file.
 
     Each column is one step occurrence; rows are time-point samples aligned
     to the step onset (time[0] = 0). The header row lists each occurrence as
     ``cycle_{outer}_sc{sub_cycle}_run{run}``.
     """
+    import io
+
     import pandas as pd
 
     # Align on a common time axis using the shortest window
@@ -621,4 +646,14 @@ def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
         col = f"cycle_{s.outer_cycle}_sc{s.sub_cycle_index}_run{s.sub_cycle_run}"
         data[col] = s.mass_corrected[:min_len]
 
-    pd.DataFrame(data).to_csv(path, sep="\t", index=False)
+    buf = io.StringIO()
+    pd.DataFrame(data).to_csv(buf, sep="\t", index=False)
+    return buf.getvalue().encode("utf-8")
+
+
+def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
+    """Write a collection of StepResults to a TSV file (see :func:`_step_tsv_bytes`).
+
+    Also used by :func:`~qcm_pak.export.save_full_export`.
+    """
+    path.write_bytes(_step_tsv_bytes(steps))
