@@ -4,6 +4,12 @@ All notable changes to QCM-PAK are documented here.
 
 ## [Unreleased]
 
+### Added
+- `AnalysisResult.to_bytes()` returns the files `save()` writes (per-step
+  TSVs and the two diagnostic figures) as a `dict` of relative path to
+  bytes, without touching the disk. A server can send or zip them without a
+  temporary directory per request. `save()` now writes exactly these bytes.
+
 ### Changed
 - The default crystal in  is now 6 MHz AT-cut quartz
   (C = -12.27 ng/cm2/Hz), matching the web analyzer. Pass
