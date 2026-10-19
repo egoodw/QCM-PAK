@@ -10,14 +10,16 @@ Three dataclasses cover all user-facing configuration:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
 from qcm_pak.exceptions import DataLoadError
 from qcm_pak.recipe import Recipe
+from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 
 @dataclass
@@ -41,6 +43,21 @@ class ALDParameters:
         self.input_file = Path(self.input_file)
         if not self.input_file.exists():
             raise DataLoadError(f"Input file not found: {self.input_file}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict (the path becomes a string)."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ALDParameters:
+        """Build ALDParameters from a dict such as :meth:`to_dict` returns.
+
+        ``input_file`` must exist, as for the constructor. Raises
+        ``ValueError`` for unknown or missing keys.
+        """
+        kwargs = dataclass_kwargs(cls, data)
+        kwargs["recipe"] = Recipe.from_dict(kwargs["recipe"])
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -82,6 +99,18 @@ class SauerbreyConstants:
             2.0 * self.fundamental_frequency**2 * self.overtone
         )
         return -C * 1e9   # g/cm² → ng/cm²
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SauerbreyConstants:
+        """Build SauerbreyConstants from a dict such as :meth:`to_dict` returns.
+
+        Keys left out keep their defaults. Raises ``ValueError`` for unknown keys.
+        """
+        return cls(**dataclass_kwargs(cls, data))
 
 
 @dataclass
@@ -165,3 +194,16 @@ class DetectionParameters:
                 f"refinement_window must be >= 0 (0 disables refinement), "
                 f"got {self.refinement_window}"
             )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DetectionParameters:
+        """Build DetectionParameters from a dict such as :meth:`to_dict` returns.
+
+        Keys left out keep their defaults. Raises ``ValueError`` for unknown
+        keys, so a misspelt setting isn't silently ignored.
+        """
+        return cls(**dataclass_kwargs(cls, data))
