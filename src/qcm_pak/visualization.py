@@ -4,6 +4,13 @@ Matplotlib-based visualizations for QCM analysis results.
 All functions return a :class:`matplotlib.figure.Figure` and do not call
 ``plt.show()`` — the caller decides whether to display or save.
 
+Figures are built with ``Figure()`` and ``fig.subplots()``, not
+``pyplot.subplots()``, so they are never registered with pyplot. A long-lived
+process can plot repeatedly without closing anything: each figure is freed
+once the caller drops it. Because pyplot doesn't know about these figures,
+``plt.show()`` won't display them; save one with ``fig.savefig()``, or in a
+notebook make it the cell's last expression.
+
 Public API:
 
 - :func:`plot_trace` — full mass vs. time trace, with detected pulses highlighted
@@ -24,6 +31,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+from matplotlib import colormaps
 from matplotlib.figure import Figure
 
 from qcm_pak._types import (
@@ -52,14 +60,13 @@ def plot_trace(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig = Figure(figsize=(12, 4))
+    ax = fig.subplots()
     ax.plot(data.time / 60.0, data.mass, lw=0.8, color="steelblue", label="Mass")
 
     if index is not None:
         unique_names = list(dict.fromkeys(n for n, _ in index.step_onsets))
-        colors = plt.cm.tab10(np.linspace(0, 0.9, max(1, len(unique_names))))  # type: ignore[attr-defined]
+        colors = colormaps["tab10"](np.linspace(0, 0.9, max(1, len(unique_names))))
         color_map = dict(zip(unique_names, colors))
 
         first_seen: set[str] = set()
@@ -105,15 +112,14 @@ def plot_cycles(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     if step is not None:
         step_names = [step]
     else:
         step_names = cycles.recipe.step_names()
 
     n = len(step_names)
-    fig, axes = plt.subplots(1, n, figsize=(6 * n, 4), squeeze=False)
+    fig = Figure(figsize=(6 * n, 4))
+    axes = fig.subplots(1, n, squeeze=False)
 
     for col, name in enumerate(step_names):
         ax = axes[0, col]
@@ -122,7 +128,7 @@ def plot_cycles(
             ax.set_title(f"{name} (no data)")
             continue
         n_traces = len(step_results)
-        colors = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, n_traces)))  # type: ignore[attr-defined]
+        colors = colormaps["viridis"](np.linspace(0.1, 0.9, max(1, n_traces)))
         for i, sr in enumerate(step_results):
             ax.plot(
                 sr.time,
@@ -157,8 +163,6 @@ def plot_langmuir(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     step_results = cycles.steps(name=result.step_name)
     min_len = min(len(s.mass_corrected) for s in step_results)
     t_exp = step_results[0].time[:min_len]
@@ -184,7 +188,8 @@ def plot_langmuir(
             f"θ₂={result.theta2:.2f}, k₂={result.k2:.4f} s⁻¹  R²={result.r_squared:.4f}"  # type: ignore[operator]
         )
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     ax.plot(t_exp, theta_exp, lw=0.8, color="steelblue", alpha=0.7, label="Avg data")
     ax.plot(t_fit, theta_fit, lw=1.5, color="tomato", label=label)
     ax.set_xlabel("Pulse time (s)")
@@ -212,8 +217,6 @@ def plot_etch(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     step_results = cycles.steps(name=result.step_name)
     min_len = min(len(s.mass_corrected) for s in step_results)
     t_exp = step_results[0].time[:min_len]
@@ -233,7 +236,8 @@ def plot_etch(
         etch_fit = result.rate * t_fit  # type: ignore[operator]
         label = f"Linear: rate={result.rate:.4f} ng/cm²/s  R²={result.r_squared:.4f}"  # type: ignore[operator]
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     ax.plot(t_exp, etch_exp, lw=0.8, color="steelblue", alpha=0.7, label="Avg data")
     ax.plot(t_fit, etch_fit, lw=1.5, color="tomato", label=label)
     ax.set_xlabel("Pulse time (s)")
@@ -259,7 +263,6 @@ def plot_derivative(data: MassDataset) -> Figure:
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
     from scipy.signal import savgol_filter
 
     mass = data.mass
@@ -270,7 +273,8 @@ def plot_derivative(data: MassDataset) -> Figure:
     smooth = savgol_filter(mass, window_length=win, polyorder=poly)
     deriv = np.gradient(smooth, data.time)
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    fig = Figure(figsize=(12, 6))
+    axes = fig.subplots(2, 1, sharex=True)
     axes[0].plot(data.time / 60.0, mass, lw=0.6, color="steelblue")
     axes[0].set_ylabel("Δm (ng/cm²)")
     axes[0].set_title("Mass trace")
@@ -314,8 +318,6 @@ def plot_detailed_cycles(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     recipe = index.recipe
     steps_per_cycle = recipe.steps_per_cycle
     total_cycles = recipe.repeats
@@ -332,7 +334,8 @@ def plot_detailed_cycles(
     lo_event = c0 * steps_per_cycle
     hi_event = min(len(index.step_onsets), c1 * steps_per_cycle)
 
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig = Figure(figsize=(12, 4))
+    ax = fig.subplots()
     if hi_event <= lo_event:
         ax.set_title(f"No events in cycles [{c0}, {c1})")
         fig.tight_layout()
@@ -349,7 +352,7 @@ def plot_detailed_cycles(
     ax.plot(data.time[window], data.mass[window], lw=0.8, color="steelblue")
 
     unique_names = list(dict.fromkeys(name for name, _ in onsets_window))
-    colors = plt.cm.tab10(np.linspace(0, 0.9, max(1, len(unique_names))))  # type: ignore[attr-defined]
+    colors = colormaps["tab10"](np.linspace(0, 0.9, max(1, len(unique_names))))
     color_map = dict(zip(unique_names, colors))
     first_seen: set[str] = set()
     for step_name, onset_idx in onsets_window:
@@ -393,14 +396,13 @@ def plot_cycles_batch(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     step_results = cycles.steps(name=step)
     if cycle_range is not None:
         lo, hi = cycle_range
         step_results = [s for s in step_results if lo <= s.outer_cycle < hi]
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     label = (
         f"cycles {cycle_range[0] + 1}-{cycle_range[1]}" if cycle_range else "all cycles"
     )
@@ -410,7 +412,7 @@ def plot_cycles_batch(
         return fig
 
     n_traces = len(step_results)
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, max(1, n_traces)))  # type: ignore[attr-defined]
+    colors = colormaps["viridis"](np.linspace(0.1, 0.9, max(1, n_traces)))
     for i, sr in enumerate(step_results):
         ax.plot(sr.time, sr.mass_corrected, lw=0.8, alpha=0.6, color=colors[i])
     ax.set_xlabel("Time in step (s)")
@@ -440,14 +442,13 @@ def plot_cycle_average(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     step_results = cycles.steps(name=step)
     if cycle_range is not None:
         lo, hi = cycle_range
         step_results = [s for s in step_results if lo <= s.outer_cycle < hi]
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     label = (
         f"cycles {cycle_range[0] + 1}-{cycle_range[1]}" if cycle_range else "all cycles"
     )
@@ -499,12 +500,11 @@ def plot_pulse_timing(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     onsets = [
         (name, idx) for name, idx in index.step_onsets if step is None or name == step
     ]
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig = Figure(figsize=(6, 4))
+    ax = fig.subplots()
     if len(onsets) < 2:
         ax.set_title("Not enough pulses to plot timing")
         fig.tight_layout()
@@ -556,8 +556,6 @@ def plot_fit_drift(
     -------
     Figure
     """
-    import matplotlib.pyplot as plt
-
     def _get(r: Mapping[str, Any], key: str) -> Any:  # noqa: ANN401 (dict or object)
         return r.get(key) if isinstance(r, Mapping) else getattr(r, key, None)
 
@@ -565,7 +563,8 @@ def plot_fit_drift(
     pts = [(c, v) for c, v in pts if c is not None and v is not None]
     pts.sort(key=lambda cv: cv[0])
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig = Figure(figsize=(7, 4))
+    ax = fig.subplots()
     if not pts:
         ax.set_title(f"{step_name} — no per-cycle {param} data")
         fig.tight_layout()

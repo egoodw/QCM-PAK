@@ -149,7 +149,6 @@ def save_full_export(
         How many outer cycles per batch of figures (keeps a long run from
         producing one increasingly-illegible overlay of everything).
     """
-    import matplotlib.pyplot as plt
     import pandas as pd
 
     from qcm_pak import visualization as viz
@@ -172,11 +171,9 @@ def save_full_export(
     # ── Full trace + derivative (unchanged from AnalysisResult.save) ────
     trace_fig = viz.plot_trace(mass_data, cycle_index)
     trace_fig.savefig(fig_dir / "full_trace.png", dpi=150, bbox_inches="tight")
-    plt.close(trace_fig)
 
     deriv_fig = viz.plot_derivative(mass_data)
     deriv_fig.savefig(fig_dir / "derivative_analysis.png", dpi=150, bbox_inches="tight")
-    plt.close(deriv_fig)
 
     # ── Detailed first/middle/last cycle views ───────────────────────────
     for location in ("first", "middle", "last"):
@@ -186,13 +183,11 @@ def save_full_export(
         fig.savefig(
             fig_dir / f"detailed_cycles_{location}.png", dpi=150, bbox_inches="tight"
         )
-        plt.close(fig)
 
     # ── Cycle-batched overlay / average / timing figures ─────────────────
-    # Figures accumulate fast here (steps x batches x 3 plot types), so each
-    # one is closed immediately after saving rather than left registered in
-    # pyplot's global figure manager — otherwise a long run can pile up
-    # dozens of retained Figure objects before this function returns.
+    # Figures accumulate fast here (steps x batches x 3 plot types). The
+    # visualization functions don't register them with pyplot, so each one
+    # is freed as soon as ``fig`` moves on to the next; nothing to close.
     total_cycles = recipe.repeats
     step_names = recipe.step_names()
     for batch_lo in range(0, max(1, total_cycles), max(1, cycle_batch_size)):
@@ -205,19 +200,16 @@ def save_full_export(
             fig.savefig(
                 batch_dir / f"{step_name}_cycles.png", dpi=150, bbox_inches="tight"
             )
-            plt.close(fig)
 
             fig = viz.plot_cycle_average(cycles, step_name, cycle_range=batch)
             fig.savefig(
                 batch_dir / f"{step_name}_average.png", dpi=150, bbox_inches="tight"
             )
-            plt.close(fig)
 
             fig = viz.plot_pulse_timing(cycle_index, mass_data, step=step_name)
             fig.savefig(
                 batch_dir / f"{step_name}_timing.png", dpi=150, bbox_inches="tight"
             )
-            plt.close(fig)
 
     # ── Per-model fit plots + per-cycle drift plots ───────────────────────
     if fits:
@@ -238,7 +230,6 @@ def save_full_export(
                         model_dir / f"{step_name}_{model_id}.png",
                         dpi=150, bbox_inches="tight",
                     )
-                    plt.close(fig)
                 except Exception:
                     # a single failed/degenerate fit shouldn't abort the whole export
                     pass
@@ -251,7 +242,6 @@ def save_full_export(
                             model_dir / f"{step_name}_{model_id}_{param}_drift.png",
                             dpi=150, bbox_inches="tight",
                         )
-                        plt.close(fig)
 
     # ── TSVs ───────────────────────────────────────────────────────────
     for step_name in step_names:

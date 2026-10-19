@@ -47,6 +47,8 @@ result = qcm.run_analysis(params, spec)
 
 # Write data/ and figures/ directories
 result.save("output/")
+# ...or get the same files in memory: {"data/cycle_data_TMA.tsv": b"...", ...}
+files = result.to_bytes()
 
 # Optional: fit Langmuir kinetics
 langmuir = qcm.fit_langmuir(result.cycles, step="TMA", model="bi")

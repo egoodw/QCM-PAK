@@ -80,6 +80,20 @@ def test_build_analysis_report_with_fits(tmp_path) -> None:
     assert "R²=" in report
 
 
+def test_saving_leaves_no_figures_registered_with_pyplot(tmp_path) -> None:
+    import matplotlib.pyplot as plt
+
+    from qcm_pak._types import AnalysisResult
+
+    data, params, index, cycles = _built_pipeline(tmp_path)
+    fits = {"A": {"langmuir_mono": _fit_dict(fit_langmuir(cycles, "A", model="mono"))}}
+    before = plt.get_fignums()
+    AnalysisResult(cycles, data, index, params).save(tmp_path / "save")
+    save_full_export(tmp_path / "full", data, index, cycles, params, fits,
+                     cycle_batch_size=3)
+    assert plt.get_fignums() == before
+
+
 def test_save_full_export_writes_core_files(tmp_path) -> None:
     data, params, index, cycles = _built_pipeline(tmp_path, n_cycles=6)
     out = tmp_path / "output"
