@@ -6,10 +6,11 @@ Three algorithms are provided:
 ``pelt_guided`` (default)
     Uses the PELT changepoint detection algorithm (L2 cost model) to locate all
     mean-shift changepoints in the mass signal globally. The set of candidates
-    is then filtered and assigned to the expected Recipe events using the recipe timeline and a ±``recipe_tolerance``
-    fractional window. Changepoint sign (positive Δm = gain, negative = loss)
-    is used when the PulseStep has ``mass_effect='gain'`` or ``'loss'`` to
-    discard false detections.
+    is then filtered and assigned to the expected Recipe events using the
+    recipe timeline and a ±``recipe_tolerance`` fractional window.
+    Changepoint sign (positive Δm = gain, negative = loss) is used when the
+    PulseStep has ``mass_effect='gain'`` or ``'loss'`` to discard false
+    detections.
 
 ``hybrid``
     Recipe-guided Savitzky-Golay derivative search. For each expected pulse
