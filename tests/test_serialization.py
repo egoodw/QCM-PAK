@@ -212,6 +212,7 @@ def test_qcm_dataset_to_dict(tmp_path: Path) -> None:
         "frequency": [6e6, 6e6 - 1],
         "temperature": [150.0, 150.1],
         "source_path": str(tmp_path / "trace.csv"),
+        "sampling": None,
     }
 
 
