@@ -31,6 +31,7 @@ from numpy.typing import NDArray
 
 from qcm_pak._types import QCMDataset
 from qcm_pak.exceptions import DataLoadError
+from qcm_pak.sampling import analyze_sampling
 from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 _FREQ_FACTORS: dict[str, float] = {
@@ -198,6 +199,7 @@ def load_data(path: str | Path, spec: ColumnSpec) -> QCMDataset:
             frequency=frequency,
             temperature=temperature,
             source_path=path,
+            sampling=analyze_sampling(time, frequency),
         )
     except ValueError as exc:
         raise DataLoadError(str(exc)) from exc

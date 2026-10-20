@@ -24,8 +24,31 @@ All notable changes to QCM-PAK are documented here.
   required keys raise `ValueError` naming them.
 - `qcm_pak.serialization`, with `to_jsonable()` for converting dicts and
   lists of results in one go.
+- A third detection method, `DetectionParameters(method="autocorr")`. It
+  finds one shared offset for the whole recipe (a start error), then
+  re-aligns each pulse against a median template of its own kind and fits a
+  line (offset plus drift) through the confident ones. Pulses it is unsure
+  about get `CycleIndex.confidence` of 0.15 and are placed on that line. The
+  default stays `pelt_guided`. New settings: `autocorr_search_frac`,
+  `autocorr_global_frac`, `autocorr_iterations`.
+- Repeated readings are detected. An instrument that stores each value
+  several times (for example 10 Hz data written at 100 Hz) is found when the
+  data loads: `QCMDataset.sampling` and `MassDataset.sampling` hold a
+  `SamplingInfo` with the stored and the effective rate and a plain-language
+  `message` for a warning. Detection works on one row per measurement and maps
+  the onsets back to the full trace (`DetectionParameters.collapse_repeats`,
+  on by default).
+- `DetectionParameters.smoothing_window_s` sets the `hybrid` smoothing window
+  in seconds.
 
 ### Changed
+- `pelt_guided` no longer needs the `ruptures` package: the same search is
+  built in and runs much faster on long traces. Breakpoints are unchanged.
+- `hybrid` smooths over a time span, not a sample count, so its result at a
+  sample rate other than 10 Hz can differ from earlier versions. Its onset
+  refinement window is never shorter than one sample.
+- Selecting a detection method that does not exist now raises `ValueError`
+  instead of running `hybrid`.
 - The default crystal in  is now 6 MHz AT-cut quartz
   (C = -12.27 ng/cm2/Hz), matching the web analyzer. Pass
    for a 5 MHz crystal

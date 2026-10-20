@@ -125,9 +125,13 @@ class DetectionParameters:
     ----------
     method:
         ``"pelt_guided"`` (default): PELT changepoint detection filtered by
-        recipe timing. Requires the ``ruptures`` library.
+        recipe timing.
         ``"hybrid"``: Recipe-guided Savitzky-Golay derivative method ported
         from QCMPy 0.5. Use as a fallback if pelt_guided misfires.
+        ``"autocorr"``: Lines the recipe up with the data, using the whole
+        trace at once (one shared offset, then a small shift per pulse), and
+        flags pulses it is unsure about with a low ``CycleIndex.confidence``.
+        Suits traces where the recipe clock and the instrument clock disagree.
     penalty:
         PELT penalty value controlling changepoint sensitivity. ``"auto"``
         estimates it from the noise floor using BIC.
@@ -138,7 +142,13 @@ class DetectionParameters:
         Fractional tolerance (±) around the recipe-expected spacing when
         assigning PELT candidates to recipe steps. Default 0.3 = ±30%.
     smoothing_window:
-        Savitzky-Golay smoothing window length in samples (hybrid only).
+        Savitzky-Golay smoothing window length in samples at 10 Hz (hybrid
+        only). Other sampling rates keep the same duration: ``50`` means 5 s.
+        Ignored when ``smoothing_window_s`` is set.
+    smoothing_window_s:
+        Smoothing window in seconds (hybrid only). ``None`` derives it from
+        ``smoothing_window``. The window is converted to samples with the
+        data's real sampling interval.
     savgol_polyorder:
         Savitzky-Golay polynomial order (hybrid only).
     derivative_threshold_a:
@@ -161,9 +171,22 @@ class DetectionParameters:
     min_snr:
         Minimum signal-to-noise ratio for accepting a detected pulse
         (hybrid only).
+    collapse_repeats:
+        When the data holds each measurement several rows in a row (see
+        :func:`~qcm_pak.sampling.analyze_sampling`), detect on one row per
+        measurement and map the onsets back to the full trace. Turn off to
+        search the stored rows as they are.
+    autocorr_search_frac:
+        Largest shift of a single pulse away from the shared offset, as a
+        fraction of the step duration (autocorr only).
+    autocorr_global_frac:
+        Largest shared offset between recipe and data, as a fraction of the
+        shortest step (autocorr only).
+    autocorr_iterations:
+        Number of re-alignment passes (autocorr only).
     """
 
-    method: Literal["pelt_guided", "hybrid"] = "pelt_guided"
+    method: Literal["pelt_guided", "hybrid", "autocorr"] = "pelt_guided"
 
     # pelt_guided options
     penalty: float | Literal["auto"] = "auto"
@@ -172,6 +195,7 @@ class DetectionParameters:
 
     # hybrid options
     smoothing_window: int = 50
+    smoothing_window_s: float | None = None
     savgol_polyorder: int = 3
     derivative_threshold_a: float = 3.0
     derivative_threshold_b: float = 1.0
@@ -180,7 +204,38 @@ class DetectionParameters:
     baseline_window: float = 5.0
     min_snr: float = 2.0
 
+    # all methods
+    collapse_repeats: bool = True
+
+    # autocorr options
+    autocorr_search_frac: float = 0.15
+    autocorr_global_frac: float = 0.5
+    autocorr_iterations: int = 5
+
     def __post_init__(self) -> None:
+        if self.method not in ("pelt_guided", "hybrid", "autocorr"):
+            raise ValueError(
+                f"method must be 'pelt_guided', 'hybrid' or 'autocorr', "
+                f"got {self.method!r}"
+            )
+        if self.smoothing_window_s is not None and self.smoothing_window_s <= 0:
+            raise ValueError(
+                f"smoothing_window_s must be > 0, got {self.smoothing_window_s}"
+            )
+        if not 0 < self.autocorr_search_frac < 0.5:
+            raise ValueError(
+                f"autocorr_search_frac must be in (0, 0.5), "
+                f"got {self.autocorr_search_frac}"
+            )
+        if not 0 < self.autocorr_global_frac <= 1:
+            raise ValueError(
+                f"autocorr_global_frac must be in (0, 1], "
+                f"got {self.autocorr_global_frac}"
+            )
+        if self.autocorr_iterations < 1:
+            raise ValueError(
+                f"autocorr_iterations must be >= 1, got {self.autocorr_iterations}"
+            )
         if self.recipe_tolerance <= 0 or self.recipe_tolerance >= 1:
             raise ValueError(
                 f"recipe_tolerance must be in (0, 1), got {self.recipe_tolerance}"

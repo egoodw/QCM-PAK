@@ -1,12 +1,11 @@
 """
 Pulse detection: find the onset index of every step in the Recipe.
 
-Two algorithms are provided:
+Three algorithms are provided:
 
 ``pelt_guided`` (default)
-    Uses the PELT changepoint detection algorithm (``ruptures`` library, L2
-    cost model) to locate all mean-shift changepoints in the mass signal
-    globally. The set of candidates is then filtered and assigned to the
+    Uses the PELT changepoint detection algorithm (L2 cost model) to locate all
+    mean-shift changepoints in the mass signal globally. The set of candidates is then filtered and assigned to the
     expected Recipe events using the recipe timeline and a ±``recipe_tolerance``
     fractional window. Changepoint sign (positive Δm = gain, negative = loss)
     is used when the PulseStep has ``mass_effect='gain'`` or ``'loss'`` to
@@ -22,24 +21,47 @@ Two algorithms are provided:
     pre-pulse baseline (``refinement_window``). This matches the algorithm
     used in QCMPy 0.5, including its onset refinement.
 
-Both algorithms return a :class:`~qcm_pak._types.CycleIndex` with exactly
+``autocorr``
+    Recipe-guided iterative re-alignment on the mass derivative. A comb over
+    every expected event finds one shared offset (the recipe start error);
+    each class of pulses then builds a median template and every pulse is
+    re-estimated against the template of the others, with a robust line
+    (offset plus drift) through the confident ones. Pulses that disagree with
+    the line, sit on a search bound or score weakly get
+    ``FLOOR_CONFIDENCE`` in ``CycleIndex.confidence`` and are placed on the
+    line.
+
+All algorithms return a :class:`~qcm_pak._types.CycleIndex` with exactly
 ``recipe.total_events`` detected onsets, or raise
 :class:`~qcm_pak.exceptions.DetectionError`.
 """
 
 from __future__ import annotations
 
+import math
 import warnings
-from typing import NamedTuple
+from dataclasses import replace
+from typing import Any, NamedTuple
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 from numpy.typing import NDArray
-from scipy.signal import savgol_filter
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import fftconvolve, find_peaks, savgol_filter
+from scipy.stats import theilslopes
 
+from qcm_pak._pelt import pelt_l2
 from qcm_pak._types import CycleIndex, MassDataset
 from qcm_pak.exceptions import DetectionError
 from qcm_pak.parameters import ALDParameters, DetectionParameters
 from qcm_pak.recipe import Recipe
+from qcm_pak.sampling import (
+    SamplingInfo,
+    analyze_sampling,
+    collapse_repeats,
+    median_interval,
+)
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
@@ -85,9 +107,55 @@ def detect_pulses(
             "time column was selected during import."
         )
 
-    if det_params.method == "pelt_guided":
-        return _detect_pelt_guided(data, params, det_params)
-    return _detect_hybrid(data, params, det_params)
+    if det_params.collapse_repeats:
+        sampling = analyze_sampling(data.time, data.mass)
+        if sampling.repeats_detected:
+            return _detect_on_collapsed(data, params, det_params, sampling)
+    return _run_method(data, params, det_params)
+
+
+def _run_method(
+    data: MassDataset,
+    params: ALDParameters,
+    det: DetectionParameters,
+) -> CycleIndex:
+    """Run the algorithm named by ``det.method``."""
+    if det.method == "pelt_guided":
+        return _detect_pelt_guided(data, params, det)
+    if det.method == "hybrid":
+        return _detect_hybrid(data, params, det)
+    if det.method == "autocorr":
+        return _detect_autocorr(data, params, det)
+    raise ValueError(f"Unknown detection method {det.method!r}.")
+
+
+def _detect_on_collapsed(
+    data: MassDataset,
+    params: ALDParameters,
+    det: DetectionParameters,
+    sampling: SamplingInfo,
+) -> CycleIndex:
+    """Detect on one row per measurement, then map the onsets to the full trace.
+
+    An instrument that stores each reading several times makes every
+    sample-count setting (smoothing window, minimum spacing) a multiple too
+    large and flattens the rise into a staircase. Dropping the repeats first
+    puts detection back on the real measurements. A long flat stretch or time
+    gap keeps both of its ends, so it keeps its true length.
+    """
+    keep, last_baseline = collapse_repeats(data.mass, sampling.repeat_length)
+    collapsed = MassDataset(
+        time=data.time[keep],
+        frequency=data.frequency[keep],
+        mass=data.mass[keep],
+        temperature=None if data.temperature is None else data.temperature[keep],
+    )
+    found = _run_method(collapsed, params, det)
+    onsets = [(name, int(last_baseline[i])) for name, i in found.step_onsets]
+    _check_count(onsets, params.recipe)
+    return CycleIndex(
+        step_onsets=onsets, recipe=found.recipe, confidence=found.confidence
+    )
 
 
 # ── Recipe timeline helper ─────────────────────────────────────────────────────
@@ -162,14 +230,6 @@ def _detect_pelt_guided(
     det: DetectionParameters,
 ) -> CycleIndex:
     """PELT changepoint detection with recipe-guided assignment."""
-    try:
-        import ruptures as rpt
-    except ImportError as exc:
-        raise ImportError(
-            "ruptures is required for pelt_guided detection. "
-            "Install it with: pip install ruptures"
-        ) from exc
-
     mass = data.mass
     time = data.time
     n = len(mass)
@@ -181,9 +241,8 @@ def _detect_pelt_guided(
         penalty = float(det.penalty)
 
     # Run PELT with L2 cost (detects mean shifts — exactly what ALD pulses are)
-    algo = rpt.Pelt(model="l2", min_size=det.min_pulse_spacing).fit(mass)
-    breakpoints = algo.predict(pen=penalty)
-    # ruptures returns the first index of each new segment (exclusive end of
+    breakpoints = pelt_l2(mass, penalty, min_size=det.min_pulse_spacing)
+    # Each breakpoint is the first index of a new segment (exclusive end of the
     # previous segment). That IS the onset sample — do not subtract 1.
     candidates = [bp for bp in breakpoints if bp < n]
 
@@ -340,6 +399,23 @@ def _bic_penalty(n: int, noise: float) -> float:
 # ── Hybrid (derivative-based) algorithm ───────────────────────────────────────
 
 
+# A smoothing_window given in samples is read at this rate (the rate the default
+# of 50 samples was tuned for), which turns it into a duration.
+_REFERENCE_INTERVAL_S = 0.1
+_MIN_SMOOTHING_SAMPLES = 5
+
+
+def _smoothing_samples(det: DetectionParameters, dt: float) -> int:
+    """Length of the smoothing window in samples at sampling interval ``dt``."""
+    if dt <= 0:
+        return det.smoothing_window
+    seconds = (
+        det.smoothing_window_s
+        if det.smoothing_window_s is not None
+        else det.smoothing_window * _REFERENCE_INTERVAL_S
+    )
+    return max(int(round(seconds / dt)), _MIN_SMOOTHING_SAMPLES)
+
 def _detect_hybrid(
     data: MassDataset,
     params: ALDParameters,
@@ -350,8 +426,14 @@ def _detect_hybrid(
     time = data.time
     n = len(mass)
 
+    # The window and the refinement search are set in seconds, so a trace at
+    # another sampling rate is smoothed over the same stretch of time.
+    dt = median_interval(time)
+    if det.refinement_window > 0 and dt > 0:
+        det = replace(det, refinement_window=max(det.refinement_window, dt))
+
     # Smooth the mass signal
-    win = min(det.smoothing_window, n // 4 * 2 + 1)   # must be odd and < n
+    win = min(_smoothing_samples(det, dt), n // 4 * 2 + 1)   # odd and < n
     if win % 2 == 0:
         win += 1
     poly = min(det.savgol_polyorder, win - 1)
@@ -537,6 +619,511 @@ def _refine_onset(
 
 
 # ── Shared validation ─────────────────────────────────────────────────────────
+
+
+# ── Autocorrelation (iterative re-alignment) algorithm ────────────────────────
+
+# Confidence given to a pulse the method is unsure about. Reviewers should look
+# at anything at or below it first.
+FLOOR_CONFIDENCE = 0.15
+
+_AC_SMOOTH_S = 0.3          # Gaussian sigma of the derivative filter (>= 0.8 samples)
+_AC_FINE_DT_S = 0.025       # working grid; the derivative is spline-upsampled to it
+_AC_MAX_UPSAMPLE = 8
+_AC_MIN_ITER = 3            # always run this many passes ...
+_AC_CONVERGED_S = 0.02      # ... and stop once no pulse moves more than this
+_AC_PRE_S = 1.0             # template window before the onset
+_AC_POST_EXTRA_S = 1.0      # template window after the pulse closes
+_AC_EDGE_FRAC = 0.8         # onset = where the template rise crosses this fraction
+_AC_MIN_CLASS = 3           # smaller classes are pooled with other small ones
+_AC_NULL_PERCENTILE = 90.0
+_AC_DEV_K = 3.0             # flag when further from the schedule than K class spreads
+_AC_DEV_FLOOR_S = 0.5       # ... but never within this (half-sample noise)
+_AC_DEV_CAP_S = 0.8         # ... and always beyond this (noisy classes spread wide)
+_AC_WEAK_FRAC = 0.3         # weak score: under the quiet null and this x class median
+_AC_FLOOR_TOL_FRAC = 0.4    # onset = floor(estimate + this x sample interval)
+_AC_CONFIDENT_FRAC = 0.5    # pulses scoring this x class median feed the line fit
+_AC_DRIFT_MIN_EVENTS = 8    # fewest confident pulses to fit a drift as well
+
+
+class _Grid(NamedTuple):
+    """The fine, uniform grid the derivative is worked on."""
+
+    t0: float       # time of the first fine sample
+    dtf: float      # fine sample interval, in seconds
+    upsample: int   # fine samples per native sample
+    x: NDArray[np.float64]
+
+
+class _AcEvents(NamedTuple):
+    """What the recipe says about every event, on the fine grid."""
+
+    timeline: list[_EventSpec]
+    tn: NDArray[np.float64]         # nominal onset times
+    nominal: NDArray[np.float64]    # nominal onsets, in fine samples
+    bound_n: NDArray[np.int64]      # per-pulse search bound, in fine samples
+    glob_n: int                     # shared-offset bound, in fine samples
+    pulses: list[float]
+
+
+class _AcFit(NamedTuple):
+    """Where the re-alignment settled."""
+
+    est: NDArray[np.float64]
+    q: NDArray[np.float64]              # the schedule line, in fine samples
+    score: NDArray[np.float64]
+    ratio: NDArray[np.float64]
+    at_bound: NDArray[np.bool_]
+    templates: dict[Any, NDArray[np.float64]]
+    offset: float                       # in fine samples
+    drift: float                        # fine samples per fine sample
+
+
+def _pulse_lengths(recipe: Recipe) -> list[float]:
+    """Pulse length of every event, in the order ``_build_timeline`` uses."""
+    out: list[float] = []
+    for _ in range(recipe.repeats):
+        for sub_cycle in recipe.sub_cycles:
+            for _ in range(sub_cycle.repeats):
+                out.extend(step.pulse for step in sub_cycle.steps)
+    return out
+
+
+def _fine_derivative(data: MassDataset) -> _Grid:
+    """Derivative of the mass on a fine uniform grid."""
+    t, first = np.unique(np.asarray(data.time, dtype=float), return_index=True)
+    m = np.asarray(data.mass, dtype=float)[first]
+    dt = float(np.median(np.diff(t))) if t.size > 1 else 0.0
+    if dt <= 0:
+        raise DetectionError(
+            "Cannot work out the sampling interval: the time column has fewer "
+            "than two distinct values."
+        )
+    n = int(round((t[-1] - t[0]) / dt)) + 1
+    tu = t[0] + dt * np.arange(n)
+    mu = np.interp(tu, t, m)
+    sigma = max(_AC_SMOOTH_S, 0.8 * dt) / dt
+    x = gaussian_filter1d(mu, sigma, order=1, mode="nearest") / dt
+    up = int(min(_AC_MAX_UPSAMPLE, max(1, math.ceil(dt / _AC_FINE_DT_S - 1e-9))))
+    dtf = dt / up
+    if up > 1:
+        xf = CubicSpline(tu, x)(tu[0] + dtf * np.arange((n - 1) * up + 1))
+    else:
+        xf = x
+    return _Grid(float(tu[0]), dtf, up, np.asarray(xf, dtype=float))
+
+
+def _comb_offset(
+    xabs: NDArray[np.float64],
+    nominal: NDArray[np.float64],
+    keys: list[Any],
+    bound_n: int,
+) -> int:
+    """Shared offset (fine samples) that puts the most |signal| under the events.
+
+    Each class of pulses is scored on its own and z-scored before the classes
+    are added, so a class with big pulses does not outvote the rest.
+    """
+    xp = np.pad(xabs, bound_n)
+    lags = np.arange(-bound_n, bound_n + 1)
+    total = np.zeros(lags.size)
+    for key in dict.fromkeys(keys):
+        members = [i for i, k in enumerate(keys) if k == key]
+        at = np.round(nominal[members])[:, None].astype(int) + bound_n + lags[None, :]
+        s = xp[np.clip(at, 0, xp.size - 1)].sum(axis=0)
+        med = np.median(s)
+        mad = 1.4826 * np.median(np.abs(s - med)) + 1e-12
+        total += (s - med) / mad
+    return int(lags[int(np.argmax(total))])
+
+
+def _range_guard(
+    keys: list[Any],
+    sign: NDArray[np.float64],
+    declared: list[str],
+    offset_n: int,
+    bound_n: int,
+) -> str:
+    """Reason the shared offset cannot be trusted (``""`` when it can).
+
+    The |signal| comb cannot tell a pulse from its neighbour one step away, so a
+    start error beyond the capture range lands every nominal event on the next
+    step's pulse and nothing in |signal| shows it. Two tell-tales: the offset
+    sits on its search bound, or the data signs of *every* declared class
+    contradict the declared mass effects (one wrong declaration is not enough).
+    """
+    if abs(offset_n) >= bound_n - 1:
+        return "offset-at-bound"
+    verdicts = []
+    for key in dict.fromkeys(keys):
+        i = keys.index(key)
+        if declared[i] in ("gain", "loss"):
+            verdicts.append(sign[i] == (1.0 if declared[i] == "gain" else -1.0))
+    if len(verdicts) >= 2 and not any(verdicts):
+        return "signs-contradict-recipe"
+    return ""
+
+
+def _class_signs(
+    xf: NDArray[np.float64],
+    centers: NDArray[np.float64],
+    declared: list[str],
+    keys: list[Any],
+    half_n: int,
+) -> NDArray[np.float64]:
+    """Sign of every (step, pulse) class, read from the data near its centres."""
+    signs = np.ones(len(keys))
+    for key in dict.fromkeys(keys):
+        members = [i for i, k in enumerate(keys) if k == key]
+        peaks = []
+        for i in members:
+            c = int(round(centers[i]))
+            seg = xf[max(0, c - half_n) : c + half_n + 1]
+            if seg.size:
+                peaks.append(seg[int(np.argmax(np.abs(seg)))])
+        v = float(np.median(peaks)) if peaks else 0.0
+        if v != 0:
+            sign = 1.0 if v > 0 else -1.0
+        else:
+            sign = -1.0 if declared[members[0]] == "loss" else 1.0
+        for i in members:
+            signs[i] = sign
+    return signs
+
+
+def _parabola(y: NDArray[np.float64], i: int) -> float:
+    """Sub-sample offset of the peak at ``y[i]``, in [-1, 1]."""
+    if 0 < i < y.size - 1:
+        d = y[i - 1] - 2 * y[i] + y[i + 1]
+        if d < 0:
+            return float(np.clip(0.5 * (y[i - 1] - y[i + 1]) / d, -1.0, 1.0))
+    return 0.0
+
+
+def _template_edge(template: NDArray[np.float64], pre_n: int) -> float:
+    """Template index where the rise before its maximum crosses the edge level."""
+    jm = int(np.argmax(template))
+    base = float(np.median(template[: max(1, pre_n // 2)]))
+    level = base + _AC_EDGE_FRAC * (float(template[jm]) - base)
+    j = jm
+    while j > 0 and template[j - 1] >= level:
+        j -= 1
+    if j == 0:
+        return 0.0
+    lo, hi = float(template[j - 1]), float(template[j])
+    return (j - 1) + (level - lo) / (hi - lo) if hi != lo else float(j)
+
+
+def _unit_rows(rows: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Rows with their mean removed and scaled to length one."""
+    rows = rows - rows.mean(axis=-1, keepdims=True)
+    norm = np.linalg.norm(rows, axis=-1, keepdims=True)
+    return np.divide(rows, norm, out=np.zeros_like(rows), where=norm > 0)
+
+
+def _second_peak_ratio(corr: NDArray[np.float64], k: int) -> float:
+    """Height of the best rival peak over the best peak (rivals stand clear)."""
+    if corr[k] <= 0:
+        return 1.0
+    peaks, _ = find_peaks(corr, prominence=0.3 * corr[k])
+    rivals = [corr[j] for j in peaks if j != k]
+    return float(max(rivals) / corr[k]) if rivals else 0.0
+
+
+def _null_threshold(
+    xp: NDArray[np.float64],
+    pad: int,
+    template: NDArray[np.float64],
+    pre_n: int,
+    zones: list[tuple[int, int]],
+    window_n: int,
+) -> float:
+    """Best matched-filter score the template reaches on quiet stretches.
+
+    ``nan`` when the trace has too few quiet stretches to say.
+    """
+    length = template.size
+    corr = fftconvolve(xp, _unit_rows(template)[::-1], mode="valid")
+    quiet = np.ones(corr.size, dtype=bool)
+    for lo, hi in zones:
+        quiet[max(0, lo + pad - pre_n - length) : max(0, hi + pad - pre_n + 1)] = False
+    quiet[: pad // 2] = False
+    quiet[-(pad // 2) :] = False
+    w = max(window_n, 1)
+    maxima = [
+        float(corr[s : s + w].max())
+        for s in range(0, corr.size - w, w)
+        if quiet[s : s + w].all()
+    ]
+    if len(maxima) >= 5:
+        return float(np.percentile(maxima, _AC_NULL_PERCENTILE))
+    return float("nan")
+
+
+def _realign_class(
+    xp: NDArray[np.float64],
+    pad: int,
+    pos: NDArray[np.int64],
+    centre: NDArray[np.float64],
+    bound_n: NDArray[np.int64],
+    pre_n: int,
+    post_n: int,
+) -> dict[str, Any]:
+    """One pass for one class: re-estimate each pulse against the others."""
+    length = pre_n + post_n + 1
+    view = sliding_window_view(xp, length)
+    segs = _unit_rows(view[pos + pad - pre_n])
+    m = len(pos)
+    full = np.median(segs, axis=0)
+    est = np.zeros(m)
+    score = np.zeros(m)
+    ratio = np.ones(m)
+    at_bound = np.zeros(m, dtype=bool)
+    for i in range(m):
+        tmpl = np.median(np.delete(segs, i, axis=0), axis=0) if m > 2 else full
+        edge = _template_edge(tmpl, pre_n)
+        t_hat = _unit_rows(tmpl)
+        c0 = int(round(centre[i]))
+        lo, hi = c0 - int(bound_n[i]), c0 + int(bound_n[i])
+        corr = view[lo + pad - pre_n : hi + pad - pre_n + 1] @ t_hat
+        k = int(np.argmax(corr))
+        est[i] = lo + k + _parabola(corr, k) - pre_n + edge
+        score[i] = corr[k]
+        at_bound[i] = k <= 1 or k >= corr.size - 2
+        ratio[i] = _second_peak_ratio(corr, k)
+    return {
+        "est": est,
+        "score": score,
+        "ratio": ratio,
+        "at_bound": at_bound,
+        "template": full,
+    }
+
+
+def _ac_events(
+    data: MassDataset, params: ALDParameters, det: DetectionParameters, dtf: float
+) -> _AcEvents:
+    """Expected events on the fine grid, with the search bounds."""
+    timeline = _build_timeline(params.recipe, data)
+    tn = np.array([e.expected_time for e in timeline])
+    dur = np.array([e.step_duration for e in timeline])
+    return _AcEvents(
+        timeline=timeline,
+        tn=tn,
+        nominal=tn,    # shifted to the grid origin by the caller
+        bound_n=np.maximum(
+            2, np.round(det.autocorr_search_frac * dur / dtf)
+        ).astype(np.int64),
+        glob_n=max(1, int(round(det.autocorr_global_frac * float(dur.min()) / dtf))),
+        pulses=_pulse_lengths(params.recipe),
+    )
+
+
+def _ac_classes(
+    keys: list[Any], sign: NDArray[np.float64]
+) -> tuple[list[Any], dict[Any, list[int]]]:
+    """Group events into (step, pulse, sign) classes; pool the small ones."""
+    full = [(k[0], k[1], int(s)) for k, s in zip(keys, sign, strict=True)]
+    counts: dict[Any, int] = {}
+    for k in full:
+        counts[k] = counts.get(k, 0) + 1
+    full = [k if counts[k] >= _AC_MIN_CLASS else ("pool", 0.0, k[2]) for k in full]
+    classes: dict[Any, list[int]] = {}
+    for i, k in enumerate(full):
+        classes.setdefault(k, []).append(i)
+    return full, classes
+
+
+def _ac_align(
+    grid: _Grid,
+    ev: _AcEvents,
+    sign: NDArray[np.float64],
+    classes: dict[Any, list[int]],
+    a_glob: int,
+    n_iter: int,
+) -> tuple[_AcFit, dict[Any, dict[str, Any]], int]:
+    """Iterate: per-class templates, per-pulse shifts, a robust schedule line."""
+    dtf = grid.dtf
+    n_events = len(ev.timeline)
+    pre_n = max(2, int(round(_AC_PRE_S / dtf)))
+    dur = np.array([e.step_duration for e in ev.timeline])
+    cls: dict[Any, dict[str, Any]] = {}
+    for key, members in classes.items():
+        post_s = min(ev.pulses[i] + _AC_POST_EXTRA_S for i in members)
+        post_s = min(post_s, 0.6 * min(dur[i] for i in members))
+        post_n = max(4, int(round(post_s / dtf)))
+        pad = int(ev.bound_n[members].max() + pre_n + post_n + ev.glob_n + 8)
+        cls[key] = {
+            "members": np.array(members),
+            "post_n": post_n,
+            "pad": pad,
+            "xp": np.pad(sign[members[0]] * grid.x, pad),
+        }
+
+    a_line, b_line = float(a_glob), 0.0
+    t_ref = float(ev.tn[0])
+
+    def line() -> NDArray[np.float64]:
+        return ev.nominal + a_line + b_line * (ev.tn - t_ref) / dtf
+
+    q = line()
+    pos = np.round(q).astype(np.int64)
+    est = q.copy()
+    score = np.zeros(n_events)
+    ratio = np.ones(n_events)
+    at_bound = np.zeros(n_events, dtype=bool)
+    templates: dict[Any, NDArray[np.float64]] = {}
+    iterations = 0
+    for it in range(n_iter):
+        iterations = it + 1
+        prev = est.copy()
+        for key, c in cls.items():
+            mem = c["members"]
+            out = _realign_class(
+                c["xp"], c["pad"], pos[mem], q[mem], ev.bound_n[mem], pre_n,
+                c["post_n"],
+            )
+            est[mem], score[mem] = out["est"], out["score"]
+            ratio[mem], at_bound[mem] = out["ratio"], out["at_bound"]
+            templates[key] = out["template"]
+        # Confident pulses: score at least a fraction of their class median.
+        conf = np.zeros(n_events, dtype=bool)
+        for c in cls.values():
+            mem = c["members"]
+            med = float(np.median(score[mem]))
+            conf[mem] = (
+                (score[mem] >= _AC_CONFIDENT_FRAC * med)
+                & (score[mem] > 0)
+                & ~at_bound[mem]
+            )
+        resid = est - ev.nominal
+        if conf.sum() >= _AC_DRIFT_MIN_EVENTS:
+            slope = theilslopes(resid[conf], ev.tn[conf])[0]
+            b_line = float(slope) * dtf
+            a_line = float(np.median(resid[conf] - slope * (ev.tn[conf] - t_ref)))
+        elif conf.sum() >= 1:
+            a_line, b_line = float(np.median(resid[conf])), 0.0
+        q = line()
+        # Next pass aligns on the trustworthy estimates, the line elsewhere.
+        pos = np.round(np.where(conf, est, q)).astype(np.int64)
+        moved = float(np.max(np.abs(est - prev))) * dtf
+        if it + 1 >= _AC_MIN_ITER and moved < _AC_CONVERGED_S:
+            break
+    fit = _AcFit(est, q, score, ratio, at_bound, templates, a_line, b_line)
+    return fit, cls, iterations
+
+
+def _ac_confidence(
+    ev: _AcEvents,
+    fit: _AcFit,
+    cls: dict[Any, dict[str, Any]],
+    pre_n: int,
+    dtf: float,
+    guard: str,
+) -> tuple[NDArray[np.bool_], NDArray[np.float64]]:
+    """Flag pulses that sit off the schedule, at a bound or have a weak signal."""
+    n_events = len(ev.timeline)
+    dev_s = (fit.est - fit.q) * dtf
+    zones = [
+        (int(round(fit.q[i])) - int(ev.bound_n[i]),
+         int(round(fit.q[i])) + int(ev.bound_n[i]))
+        for i in range(n_events)
+    ]
+    flagged = np.zeros(n_events, dtype=bool)
+    confidence = np.zeros(n_events)
+    for key, c in cls.items():
+        mem = c["members"]
+        w = int(2 * ev.bound_n[mem].max() + 1)
+        padded_zones = [(lo - pre_n - c["post_n"], hi + pre_n + c["post_n"])
+                        for lo, hi in zones]
+        thr = _null_threshold(
+            c["xp"], c["pad"], fit.templates[key], pre_n, padded_zones, w
+        )
+        med = float(np.median(fit.score[mem]))
+        if not np.isfinite(thr):
+            thr = 0.3 * med
+        d = dev_s[mem]
+        spread = 1.4826 * float(np.median(np.abs(d - np.median(d))))
+        limit = float(np.clip(_AC_DEV_K * spread, _AC_DEV_FLOOR_S, _AC_DEV_CAP_S))
+        for i in mem:
+            bad = (
+                abs(dev_s[i]) > limit
+                or fit.at_bound[i]
+                or (fit.score[i] <= thr and fit.score[i] < _AC_WEAK_FRAC * med)
+            )
+            flagged[i] = bad
+            if bad:
+                confidence[i] = FLOOR_CONFIDENCE
+            else:
+                span = max(med - thr, 1e-12)
+                confidence[i] = float(
+                    np.clip(0.3 + 0.7 * (fit.score[i] - thr) / span, 0.3, 1.0)
+                )
+    if guard:    # the alignment itself is in doubt: every pulse needs a look
+        flagged[:] = True
+        confidence[:] = FLOOR_CONFIDENCE
+    return flagged, confidence
+
+
+def _detect_autocorr(
+    data: MassDataset,
+    params: ALDParameters,
+    det: DetectionParameters,
+    snap_flagged: bool = True,
+) -> CycleIndex:
+    """Recipe-guided iterative re-alignment on the mass derivative.
+
+    The recipe gives the nominal time of every event. A comb over all of them
+    finds one shared offset (the recipe start error); each class of pulses then
+    builds a median template, and every pulse is re-estimated against the
+    template of the others inside a small window around the shared schedule.
+    Pulses whose estimate disagrees with the schedule, sits on its search bound
+    or scores weakly are flagged with :data:`FLOOR_CONFIDENCE` and, when
+    ``snap_flagged`` is true, put on the schedule line.
+
+    The onset is the last sample at or before the estimated rise, the same
+    convention as ``hybrid``.
+    """
+    grid = _fine_derivative(data)
+    ev = _ac_events(data, params, det, grid.dtf)
+    ev = ev._replace(nominal=(ev.tn - grid.t0) / grid.dtf)
+    declared = [e.mass_effect for e in ev.timeline]
+
+    # Shared offset, sign-free: the declared mass effects are not trusted here.
+    keys = [(e.step_name, round(p, 3)) for e, p in zip(ev.timeline, ev.pulses,
+                                                        strict=True)]
+    a_glob = _comb_offset(np.abs(grid.x), ev.nominal, keys, ev.glob_n)
+    sign = _class_signs(
+        grid.x, ev.nominal + a_glob, declared, keys, int(round(1.0 / grid.dtf))
+    )
+    guard = _range_guard(keys, sign, declared, a_glob, ev.glob_n)
+    _, classes = _ac_classes(keys, sign)
+
+    fit, cls, _ = _ac_align(
+        grid, ev, sign, classes, a_glob, det.autocorr_iterations
+    )
+    pre_n = max(2, int(round(_AC_PRE_S / grid.dtf)))
+    flagged, confidence = _ac_confidence(ev, fit, cls, pre_n, grid.dtf, guard)
+
+    final = np.where(flagged & snap_flagged, fit.q, fit.est)
+    t_on = grid.t0 + final * grid.dtf
+    time = data.time
+    native_dt = grid.dtf * grid.upsample
+    idx = np.clip(
+        np.searchsorted(time, t_on + _AC_FLOOR_TOL_FRAC * native_dt + 1e-9, "right")
+        - 1,
+        0,
+        len(time) - 1,
+    )
+    for i in range(1, len(idx)):    # strictly increasing, as _check_count needs
+        idx[i] = max(idx[i], idx[i - 1] + 1)
+    onsets = [(ev.timeline[i].step_name, int(idx[i])) for i in range(len(idx))]
+    _check_count(onsets, params.recipe)
+    return CycleIndex(
+        step_onsets=onsets,
+        recipe=params.recipe,
+        confidence=[float(c) for c in confidence],
+    )
 
 
 def _check_count(

@@ -29,6 +29,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from qcm_pak.recipe import Recipe
+from qcm_pak.sampling import SamplingInfo
 from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 if TYPE_CHECKING:
@@ -58,12 +59,17 @@ class QCMDataset:
         Sample temperature in °C, if a temperature column was provided.
     source_path:
         Path to the source file, for traceability.
+    sampling:
+        Nominal and effective sampling rate, and whether each value is
+        repeated over several rows. Filled in by
+        :func:`~qcm_pak.io.load_data`; ``None`` for data built by hand.
     """
 
     time: NDArray[np.float64]
     frequency: NDArray[np.float64]
     temperature: NDArray[np.float64] | None = None
     source_path: Path | None = None
+    sampling: SamplingInfo | None = None
 
     def __post_init__(self) -> None:
         if len(self.time) != len(self.frequency):
@@ -111,12 +117,15 @@ class MassDataset:
         negative = mass loss relative to first point).
     temperature:
         Sample temperature in °C, if available.
+    sampling:
+        Sampling information carried over from the raw dataset, if any.
     """
 
     time: NDArray[np.float64]
     frequency: NDArray[np.float64]
     mass: NDArray[np.float64]
     temperature: NDArray[np.float64] | None = None
+    sampling: SamplingInfo | None = None
 
     @property
     def n_points(self) -> int:
