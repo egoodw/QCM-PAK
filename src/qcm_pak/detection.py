@@ -695,6 +695,12 @@ def _fine_derivative(data: MassDataset) -> _Grid:
     t, first = np.unique(np.asarray(data.time, dtype=float), return_index=True)
     m = np.asarray(data.mass, dtype=float)[first]
     dt = float(np.median(np.diff(t))) if t.size > 1 else 0.0
+    if t.size > 1:
+        # Readings that arrive in bursts (many samples a fraction of a
+        # millisecond apart, then a gap) make the median step far shorter than
+        # the real spacing. A grid at that step would be orders of magnitude
+        # larger than the data, so never go finer than the average spacing.
+        dt = max(dt, float(t[-1] - t[0]) / (t.size - 1))
     if dt <= 0:
         raise DetectionError(
             "Cannot work out the sampling interval: the time column has fewer "
