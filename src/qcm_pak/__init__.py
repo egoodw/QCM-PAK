@@ -40,6 +40,7 @@ from qcm_pak._types import (
     MassDataset,
     PulseCorrection,
     QCMDataset,
+    RecipeWarning,
     StepResult,
     SubCycleRun,
 )
@@ -51,6 +52,7 @@ from qcm_pak.exceptions import (
     DataLoadError,
     DetectionError,
     QCMPakError,
+    RecipeMismatchError,
 )
 from qcm_pak.export import build_analysis_report, save_full_export
 from qcm_pak.extraction import extract_cycles
@@ -77,6 +79,7 @@ __all__ = [
     "QCMPakError",
     "DataLoadError",
     "DetectionError",
+    "RecipeMismatchError",
     "ConvergenceError",
     # Recipe
     "PulseStep",
@@ -91,6 +94,7 @@ __all__ = [
     "MassDataset",
     "CycleIndex",
     "PulseCorrection",
+    "RecipeWarning",
     # Types — results
     "StepResult",
     "SubCycleRun",

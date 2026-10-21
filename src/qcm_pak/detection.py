@@ -54,9 +54,10 @@ from scipy.stats import theilslopes
 
 from qcm_pak._pelt import pelt_l2
 from qcm_pak._types import CycleIndex, MassDataset
-from qcm_pak.exceptions import DetectionError
+from qcm_pak.exceptions import DetectionError, RecipeMismatchError
 from qcm_pak.parameters import ALDParameters, DetectionParameters
 from qcm_pak.recipe import Recipe
+from qcm_pak.recipe_check import check_onsets, check_recipe
 from qcm_pak.sampling import (
     SamplingInfo,
     analyze_sampling,
@@ -108,11 +109,25 @@ def detect_pulses(
             "time column was selected during import."
         )
 
+    found = check_recipe(data, params.recipe, det_params.recipe_tolerance)
+    if any(w.severity == "error" for w in found):
+        errors = [w for w in found if w.severity == "error"]
+        raise RecipeMismatchError(" ".join(w.message for w in errors), found)
+
+    index = None
     if det_params.collapse_repeats:
         sampling = analyze_sampling(data.time, data.mass)
         if sampling.repeats_detected:
-            return _detect_on_collapsed(data, params, det_params, sampling)
-    return _run_method(data, params, det_params)
+            index = _detect_on_collapsed(data, params, det_params, sampling)
+    if index is None:
+        index = _run_method(data, params, det_params)
+    if not any(w.code == "timeline_drift" for w in found):
+        found += check_onsets(
+            params.recipe, data.time[[i for _, i in index.step_onsets]],
+            det_params.recipe_tolerance,
+        )
+    index.recipe_warnings = found
+    return index
 
 
 def _run_method(
@@ -573,6 +588,8 @@ def _refine_onset(
     t_peak = time[peak_idx]
     start = max(int(np.searchsorted(time, t_peak - det.refinement_window)), lower)
     stop = min(int(np.searchsorted(time, t_peak + det.refinement_window)), n - 2)
+    if start >= n - 1:
+        return peak_idx
     t_base_start = time[start] - det.baseline_window
     base_start = int(np.searchsorted(time, t_base_start))
     # At low sample rates the baseline window holds only a few samples, which

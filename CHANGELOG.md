@@ -5,6 +5,15 @@ All notable changes to QCM-PAK are documented here.
 ## [Unreleased]
 
 ### Added
+- Recipe check. `detect_pulses` now compares the recipe with the pulses it can
+  see in the trace and puts what it finds in `CycleIndex.recipe_warnings`, a
+  list of `RecipeWarning(code, severity, message, suggestion)`. Codes:
+  `timeline_drift`, `pulse_count_mismatch`, `start_offset`, `data_ends_early`.
+  `suggestion` is a dict a UI can apply: `repeats`, `start_time`, and
+  `purge_delta_s` (to add to every step's purge). `qcm_pak.recipe_check`
+  has `check_recipe` for use on its own.
+- `RecipeMismatchError` (a `DetectionError`) is raised when the recipe runs
+  past the end of the data; its `.warnings` holds the suggested fix.
 - `AnalysisResult.to_bytes()` returns the files `save()` writes (per-step
   TSVs and the two diagnostic figures) as a `dict` of relative path to
   bytes, without touching the disk. A server can send or zip them without a
@@ -61,11 +70,16 @@ All notable changes to QCM-PAK are documented here.
   (default 1.0 s); set it to 0 for the previous onsets.
 
 ### Fixed
+recipe-check (PR # 8)
+- A recipe with more cycles or longer purges than the data holds no longer
+  fails with an `IndexError` (hybrid, autocorr) or a vague `DetectionError`
+  (pelt_guided); it raises `RecipeMismatchError` with a suggested recipe.
 - `autocorr` no longer builds a working grid far larger than the data when a
   trace's timestamps arrive in bursts (many samples a fraction of a
   millisecond apart, then a gap). The grid step is now never finer than the
   average sample spacing, which keeps time and memory in proportion to the
   length of the trace.
+main (PR # 9)
 - Figures no longer pile up in memory in long-running processes such as the
   web app. The plot functions in `qcm_pak.visualization` now build figures
   without pyplot, so each one is freed when it is no longer used, and

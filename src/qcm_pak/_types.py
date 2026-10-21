@@ -185,6 +185,37 @@ class MassDataset:
         return dataclass_to_dict(self)
 
 
+@dataclass(frozen=True)
+class RecipeWarning:
+    """One way the recipe does not fit the data, with a suggested fix.
+
+    Parameters
+    ----------
+    code:
+        Machine-readable kind: ``"data_ends_early"``, ``"timeline_drift"``,
+        ``"pulse_count_mismatch"`` or ``"start_offset"``.
+    severity:
+        ``"error"`` when detection cannot run on this recipe, ``"warning"``
+        when it can but the result is probably wrong.
+    message:
+        Plain-language description for the user.
+    suggestion:
+        Recipe changes that would fit the data, for a one-click "use suggested
+        recipe": ``repeats`` (outer cycle count), ``start_time`` (seconds) and
+        ``purge_delta_s`` (seconds to add to the purge of every step, negative
+        to shorten). ``None`` when no fix can be estimated.
+    """
+
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    suggestion: dict[str, float | int] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict."""
+        return dataclass_to_dict(self)
+
+
 @dataclass
 class CycleIndex:
     """Detected pulse onset positions, structured to mirror the Recipe.
@@ -212,12 +243,16 @@ class CycleIndex:
         removed from ``step_onsets`` (that would desync every subsequent
         pulse's position in the recipe hierarchy) — excluded pulses are kept
         in place and filtered out later, at the :class:`StepResult` level.
+    recipe_warnings:
+        Ways the recipe does not fit the data, found by
+        :func:`~qcm_pak.recipe_check.check_recipe` (empty when it fits).
     """
 
     step_onsets: list[tuple[str, int]]
     recipe: Recipe
     confidence: list[float] = field(default_factory=list)
     excluded: list[bool] = field(default_factory=list)
+    recipe_warnings: list[RecipeWarning] = field(default_factory=list)
 
     @property
     def n_detected(self) -> int:
