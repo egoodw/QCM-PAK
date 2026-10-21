@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from qcm_pak._types import MassDataset
-from qcm_pak.detection import FLOOR_CONFIDENCE, detect_pulses
+from qcm_pak.detection import FLOOR_CONFIDENCE, _fine_derivative, detect_pulses
 from qcm_pak.exceptions import DetectionError
 from qcm_pak.parameters import ALDParameters, DetectionParameters
 from qcm_pak.recipe import PulseStep, Recipe, SubCycle
@@ -133,6 +133,34 @@ def test_stair_stepped_data_gives_the_same_onsets_as_plain_data(
     t_plain = np.array([plain.time[i] for _, i in a.step_onsets])
     t_stair = np.array([stairs.time[i] for _, i in b.step_onsets])
     assert np.max(np.abs(t_plain - t_stair)) <= 0.35
+
+
+def _bursty(n_cycles: int, gap: float = 1e-4) -> tuple[MassDataset, list[float]]:
+    """Each 10 Hz reading arrives as ten distinct samples ``gap`` s apart."""
+    base, truth = _trace(n_cycles=n_cycles)
+    rng = np.random.default_rng(11)
+    time = (base.time[:, None] + gap * np.arange(10)[None, :]).ravel()
+    mass = np.repeat(base.mass, 10) + rng.normal(0, 0.003, time.size)
+    data = MassDataset(time=time, frequency=np.full(time.size, 5e6), mass=mass)
+    return data, truth
+
+
+def test_bursty_timestamps_do_not_inflate_the_working_grid() -> None:
+    # The median step here is 0.1 ms but readings come every 0.1 s. A grid
+    # at the median step would be 1000x the size of the data.
+    data, _ = _bursty(n_cycles=6)
+    grid = _fine_derivative(data)
+    assert grid.x.size <= 4 * data.time.size
+
+
+def test_bursty_timestamps_still_find_the_onsets(tmp_path: pathlib.Path) -> None:
+    data, truth = _bursty(n_cycles=6)
+    cycle = detect_pulses(
+        data, _params(tmp_path, n_cycles=6), DetectionParameters(method="autocorr")
+    )
+    found = np.array([data.time[i] for _, i in cycle.step_onsets])
+    assert len(found) == len(truth)
+    assert np.max(np.abs(found - np.array(truth))) <= 0.5
 
 
 def test_a_trace_without_pulses_does_not_crash_and_flags_more(
