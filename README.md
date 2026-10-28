@@ -111,6 +111,23 @@ hf_etch = qcm.fit_etch(result.cycles, step="HF", model="saturating")
 print(f"HF etch_max={hf_etch.etch_max:.3f} ng/cm²,  k={hf_etch.k:.4f} s⁻¹")
 ```
 
+## Growth switch (incubation)
+
+Some runs show no growth or mass loss first, then steady mass gain. Find where:
+
+```python
+sw = qcm.detect_growth_switch(result, n_consecutive=5)
+if sw.found:
+    print(sw.switch_cycle, sw.incubation_time, sw.growth_before, sw.growth_after)
+else:
+    print(sw.notes)
+```
+
+The switch is the first cycle that starts `n_consecutive` cycles in a row
+whose mass change is above `noise_factor` (default 2) times the robust noise
+level of the per-cycle mass change. This only detects the switch; it does not
+fit either regime. `find_growth_switch()` takes a plain per-cycle series.
+
 ## Column Specification
 
 ```python

@@ -4,6 +4,13 @@ All notable changes to QCM-PAK are documented here.
 
 ## [Unreleased]
 
+### Added
+- `find_growth_switch()` and `detect_growth_switch()` find the cycle where a
+  run switches from no growth or mass loss to steady mass gain (incubation),
+  with the incubation time and the mean growth per cycle before and after.
+  Detection only; no fit results change. Noise comes from the median absolute
+  deviation of cycle-to-cycle differences (`estimate_cycle_noise()`).
+
 ### Changed
 - The default crystal in  is now 6 MHz AT-cut quartz
   (C = -12.27 ng/cm2/Hz), matching the web analyzer. Pass

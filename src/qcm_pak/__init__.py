@@ -54,6 +54,12 @@ from qcm_pak.exceptions import (
 )
 from qcm_pak.export import build_analysis_report, save_full_export
 from qcm_pak.extraction import extract_cycles
+from qcm_pak.growth import (
+    GrowthSwitchResult,
+    detect_growth_switch,
+    estimate_cycle_noise,
+    find_growth_switch,
+)
 from qcm_pak.io import ColumnSpec, load_data
 from qcm_pak.kinetics import (
     fit_etch,
@@ -99,6 +105,7 @@ __all__ = [
     # Types — kinetics
     "LangmuirResult",
     "EtchResult",
+    "GrowthSwitchResult",
     # Types — top level
     "AnalysisResult",
     # Functions
@@ -113,6 +120,9 @@ __all__ = [
     "fit_etch",
     "fit_etch_per_cycle",
     "run_analysis",
+    "find_growth_switch",
+    "detect_growth_switch",
+    "estimate_cycle_noise",
     "save_full_export",
     "build_analysis_report",
     # Models
