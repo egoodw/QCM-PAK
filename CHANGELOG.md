@@ -5,6 +5,12 @@ All notable changes to QCM-PAK are documented here.
 ## [Unreleased]
 
 ### Added
+agent/growth-switch
+- `find_growth_switch()` and `detect_growth_switch()` find the cycle where a
+  run switches from no growth or mass loss to steady mass gain (incubation),
+  with the incubation time and the mean growth per cycle before and after.
+  Detection only; no fit results change. Noise comes from the median absolute
+  deviation of cycle-to-cycle differences (`estimate_cycle_noise()`).
 - Recipe check. `detect_pulses` now compares the recipe with the pulses it can
   see in the trace and puts what it finds in `CycleIndex.recipe_warnings`, a
   list of `RecipeWarning(code, severity, message, suggestion)`. Codes:
@@ -49,6 +55,7 @@ All notable changes to QCM-PAK are documented here.
   on by default).
 - `DetectionParameters.smoothing_window_s` sets the `hybrid` smoothing window
   in seconds.
+main
 
 ### Changed
 - `pelt_guided` no longer needs the `ruptures` package: the same search is
