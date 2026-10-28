@@ -77,4 +77,5 @@ def apply_corrections(
         recipe=index.recipe,
         confidence=list(index.confidence),
         excluded=excluded,
+        recipe_warnings=list(index.recipe_warnings),
     )

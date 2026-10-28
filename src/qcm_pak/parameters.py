@@ -10,14 +10,16 @@ Three dataclasses cover all user-facing configuration:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
 from qcm_pak.exceptions import DataLoadError
 from qcm_pak.recipe import Recipe
+from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 
 @dataclass
@@ -41,6 +43,21 @@ class ALDParameters:
         self.input_file = Path(self.input_file)
         if not self.input_file.exists():
             raise DataLoadError(f"Input file not found: {self.input_file}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict (the path becomes a string)."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ALDParameters:
+        """Build ALDParameters from a dict such as :meth:`to_dict` returns.
+
+        ``input_file`` must exist, as for the constructor. Raises
+        ``ValueError`` for unknown or missing keys.
+        """
+        kwargs = dataclass_kwargs(cls, data)
+        kwargs["recipe"] = Recipe.from_dict(kwargs["recipe"])
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -83,6 +100,18 @@ class SauerbreyConstants:
         )
         return -C * 1e9   # g/cm² → ng/cm²
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SauerbreyConstants:
+        """Build SauerbreyConstants from a dict such as :meth:`to_dict` returns.
+
+        Keys left out keep their defaults. Raises ``ValueError`` for unknown keys.
+        """
+        return cls(**dataclass_kwargs(cls, data))
+
 
 @dataclass
 class DetectionParameters:
@@ -96,9 +125,13 @@ class DetectionParameters:
     ----------
     method:
         ``"pelt_guided"`` (default): PELT changepoint detection filtered by
-        recipe timing. Requires the ``ruptures`` library.
+        recipe timing.
         ``"hybrid"``: Recipe-guided Savitzky-Golay derivative method ported
         from QCMPy 0.5. Use as a fallback if pelt_guided misfires.
+        ``"autocorr"``: Lines the recipe up with the data, using the whole
+        trace at once (one shared offset, then a small shift per pulse), and
+        flags pulses it is unsure about with a low ``CycleIndex.confidence``.
+        Suits traces where the recipe clock and the instrument clock disagree.
     penalty:
         PELT penalty value controlling changepoint sensitivity. ``"auto"``
         estimates it from the noise floor using BIC.
@@ -109,7 +142,13 @@ class DetectionParameters:
         Fractional tolerance (±) around the recipe-expected spacing when
         assigning PELT candidates to recipe steps. Default 0.3 = ±30%.
     smoothing_window:
-        Savitzky-Golay smoothing window length in samples (hybrid only).
+        Savitzky-Golay smoothing window length in samples at 10 Hz (hybrid
+        only). Other sampling rates keep the same duration: ``50`` means 5 s.
+        Ignored when ``smoothing_window_s`` is set.
+    smoothing_window_s:
+        Smoothing window in seconds (hybrid only). ``None`` derives it from
+        ``smoothing_window``. The window is converted to samples with the
+        data's real sampling interval.
     savgol_polyorder:
         Savitzky-Golay polynomial order (hybrid only).
     derivative_threshold_a:
@@ -118,19 +157,36 @@ class DetectionParameters:
         Derivative threshold multiplier for precursor-B pulses (hybrid only).
     adaptive_threshold_sigma:
         Number of standard deviations above baseline for adaptive threshold
-        (hybrid only).
+        (hybrid only). Onset refinement uses the same multiple of the raw-mass
+        noise to decide where the rise begins.
     refinement_window:
-        Local search window in seconds around a candidate onset for refinement
-        (hybrid only).
+        Half-width in seconds of the window around each derivative peak in
+        which the onset is refined back to the last sample on the pre-pulse
+        baseline (hybrid only). ``0`` disables refinement and keeps the
+        derivative peak, which lands late on fast or smoothed rises.
     baseline_window:
         Pre-pulse window in seconds used to estimate local baseline for
-        adaptive threshold (hybrid only).
+        adaptive threshold, and the quiet stretch that onset refinement fits
+        its baseline line to (hybrid only).
     min_snr:
         Minimum signal-to-noise ratio for accepting a detected pulse
         (hybrid only).
+    collapse_repeats:
+        When the data holds each measurement several rows in a row (see
+        :func:`~qcm_pak.sampling.analyze_sampling`), detect on one row per
+        measurement and map the onsets back to the full trace. Turn off to
+        search the stored rows as they are.
+    autocorr_search_frac:
+        Largest shift of a single pulse away from the shared offset, as a
+        fraction of the step duration (autocorr only).
+    autocorr_global_frac:
+        Largest shared offset between recipe and data, as a fraction of the
+        shortest step (autocorr only).
+    autocorr_iterations:
+        Number of re-alignment passes (autocorr only).
     """
 
-    method: Literal["pelt_guided", "hybrid"] = "pelt_guided"
+    method: Literal["pelt_guided", "hybrid", "autocorr"] = "pelt_guided"
 
     # pelt_guided options
     penalty: float | Literal["auto"] = "auto"
@@ -139,6 +195,7 @@ class DetectionParameters:
 
     # hybrid options
     smoothing_window: int = 50
+    smoothing_window_s: float | None = None
     savgol_polyorder: int = 3
     derivative_threshold_a: float = 3.0
     derivative_threshold_b: float = 1.0
@@ -147,7 +204,38 @@ class DetectionParameters:
     baseline_window: float = 5.0
     min_snr: float = 2.0
 
+    # all methods
+    collapse_repeats: bool = True
+
+    # autocorr options
+    autocorr_search_frac: float = 0.15
+    autocorr_global_frac: float = 0.5
+    autocorr_iterations: int = 5
+
     def __post_init__(self) -> None:
+        if self.method not in ("pelt_guided", "hybrid", "autocorr"):
+            raise ValueError(
+                f"method must be 'pelt_guided', 'hybrid' or 'autocorr', "
+                f"got {self.method!r}"
+            )
+        if self.smoothing_window_s is not None and self.smoothing_window_s <= 0:
+            raise ValueError(
+                f"smoothing_window_s must be > 0, got {self.smoothing_window_s}"
+            )
+        if not 0 < self.autocorr_search_frac < 0.5:
+            raise ValueError(
+                f"autocorr_search_frac must be in (0, 0.5), "
+                f"got {self.autocorr_search_frac}"
+            )
+        if not 0 < self.autocorr_global_frac <= 1:
+            raise ValueError(
+                f"autocorr_global_frac must be in (0, 1], "
+                f"got {self.autocorr_global_frac}"
+            )
+        if self.autocorr_iterations < 1:
+            raise ValueError(
+                f"autocorr_iterations must be >= 1, got {self.autocorr_iterations}"
+            )
         if self.recipe_tolerance <= 0 or self.recipe_tolerance >= 1:
             raise ValueError(
                 f"recipe_tolerance must be in (0, 1), got {self.recipe_tolerance}"
@@ -156,3 +244,21 @@ class DetectionParameters:
             raise ValueError(
                 f"min_pulse_spacing must be >= 1, got {self.min_pulse_spacing}"
             )
+        if self.refinement_window < 0:
+            raise ValueError(
+                f"refinement_window must be >= 0 (0 disables refinement), "
+                f"got {self.refinement_window}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DetectionParameters:
+        """Build DetectionParameters from a dict such as :meth:`to_dict` returns.
+
+        Keys left out keep their defaults. Raises ``ValueError`` for unknown
+        keys, so a misspelt setting isn't silently ignored.
+        """
+        return cls(**dataclass_kwargs(cls, data))

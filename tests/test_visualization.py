@@ -195,3 +195,33 @@ def test_plot_fit_drift_with_dict_records() -> None:
 def test_plot_fit_drift_empty_records() -> None:
     fig = plot_fit_drift([], "A", param="k")
     assert isinstance(fig, Figure)
+
+
+def test_plotting_in_a_loop_does_not_register_figures_with_pyplot() -> None:
+    # A long-lived process (the web app) plots for every request. Figures
+    # registered with pyplot stay alive until someone calls plt.close(), so
+    # every plot function must build its figure without pyplot.
+    import matplotlib.pyplot as plt
+
+    mass, index, cycles = _simple_mass(), _simple_index(), _simple_collection()
+    langmuir = LangmuirResult(
+        step_name="A", model="mono", r_squared=0.99, k=0.1, theta_max=12.0,
+    )
+    etch = EtchResult(
+        step_name="A", model="saturating", r_squared=0.98, k=0.05, etch_max=3.0,
+    )
+    drift = [{"outer_cycle": i, "k": 0.1 + 0.01 * i} for i in range(5)]
+
+    before = plt.get_fignums()
+    for _ in range(5):
+        plot_trace(mass, index)
+        plot_cycles(cycles)
+        plot_langmuir(cycles, langmuir)
+        plot_etch(cycles, etch)
+        plot_derivative(mass)
+        plot_detailed_cycles(mass, index, location="middle", n_cycles=1)
+        plot_cycles_batch(cycles, "A", cycle_range=(0, 2))
+        plot_cycle_average(cycles, "A", cycle_range=(0, 2))
+        plot_pulse_timing(index, mass)
+        plot_fit_drift(drift, "A", param="k")
+    assert plt.get_fignums() == before

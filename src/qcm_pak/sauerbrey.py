@@ -55,4 +55,5 @@ def frequency_to_mass(
         frequency=data.frequency,
         mass=mass,
         temperature=data.temperature,
+        sampling=data.sampling,
     )

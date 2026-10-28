@@ -20,17 +20,21 @@ Top-level container:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
 from qcm_pak.recipe import Recipe
+from qcm_pak.sampling import SamplingInfo
+from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+
     from qcm_pak.parameters import ALDParameters
 
 
@@ -55,12 +59,17 @@ class QCMDataset:
         Sample temperature in °C, if a temperature column was provided.
     source_path:
         Path to the source file, for traceability.
+    sampling:
+        Nominal and effective sampling rate, and whether each value is
+        repeated over several rows. Filled in by
+        :func:`~qcm_pak.io.load_data`; ``None`` for data built by hand.
     """
 
     time: NDArray[np.float64]
     frequency: NDArray[np.float64]
     temperature: NDArray[np.float64] | None = None
     source_path: Path | None = None
+    sampling: SamplingInfo | None = None
 
     def __post_init__(self) -> None:
         if len(self.time) != len(self.frequency):
@@ -84,6 +93,10 @@ class QCMDataset:
         """Total measurement duration in seconds."""
         return float(self.time[-1] - self.time[0])
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: arrays become lists, NaN becomes None."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class MassDataset:
@@ -104,12 +117,15 @@ class MassDataset:
         negative = mass loss relative to first point).
     temperature:
         Sample temperature in °C, if available.
+    sampling:
+        Sampling information carried over from the raw dataset, if any.
     """
 
     time: NDArray[np.float64]
     frequency: NDArray[np.float64]
     mass: NDArray[np.float64]
     temperature: NDArray[np.float64] | None = None
+    sampling: SamplingInfo | None = None
 
     @property
     def n_points(self) -> int:
@@ -164,6 +180,41 @@ class MassDataset:
                 "selected during import."
             )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: arrays become lists, NaN becomes None."""
+        return dataclass_to_dict(self)
+
+
+@dataclass(frozen=True)
+class RecipeWarning:
+    """One way the recipe does not fit the data, with a suggested fix.
+
+    Parameters
+    ----------
+    code:
+        Machine-readable kind: ``"data_ends_early"``, ``"timeline_drift"``,
+        ``"pulse_count_mismatch"`` or ``"start_offset"``.
+    severity:
+        ``"error"`` when detection cannot run on this recipe, ``"warning"``
+        when it can but the result is probably wrong.
+    message:
+        Plain-language description for the user.
+    suggestion:
+        Recipe changes that would fit the data, for a one-click "use suggested
+        recipe": ``repeats`` (outer cycle count), ``start_time`` (seconds) and
+        ``purge_delta_s`` (seconds to add to the purge of every step, negative
+        to shorten). ``None`` when no fix can be estimated.
+    """
+
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    suggestion: dict[str, float | int] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class CycleIndex:
@@ -192,17 +243,25 @@ class CycleIndex:
         removed from ``step_onsets`` (that would desync every subsequent
         pulse's position in the recipe hierarchy) — excluded pulses are kept
         in place and filtered out later, at the :class:`StepResult` level.
+    recipe_warnings:
+        Ways the recipe does not fit the data, found by
+        :func:`~qcm_pak.recipe_check.check_recipe` (empty when it fits).
     """
 
     step_onsets: list[tuple[str, int]]
     recipe: Recipe
     confidence: list[float] = field(default_factory=list)
     excluded: list[bool] = field(default_factory=list)
+    recipe_warnings: list[RecipeWarning] = field(default_factory=list)
 
     @property
     def n_detected(self) -> int:
         """Number of detected pulse events."""
         return len(self.step_onsets)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; each onset becomes ``[step_name, index]``."""
+        return dataclass_to_dict(self)
 
 
 @dataclass
@@ -228,6 +287,18 @@ class PulseCorrection:
     pulse_id: int
     new_onset_idx: int | None = None
     excluded: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> PulseCorrection:
+        """Build a PulseCorrection from a dict such as :meth:`to_dict` returns.
+
+        Raises ``ValueError`` for unknown or missing keys.
+        """
+        return cls(**dataclass_kwargs(cls, data))
 
 
 # ── Analysis results (three levels) ──────────────────────────────────────────
@@ -281,6 +352,10 @@ class StepResult:
     mass_change: float
     excluded: bool = False
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: arrays become lists, NaN becomes None."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class SubCycleRun:
@@ -312,6 +387,10 @@ class SubCycleRun:
         """Net mass change across all steps in this SubCycle run (ng/cm²)."""
         return sum(s.mass_change for s in self.steps)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict, with each step as a nested dict."""
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class Cycle:
@@ -335,6 +414,10 @@ class Cycle:
     def net_mass_change(self) -> float:
         """Net mass change across all sub-cycles in this outer cycle (ng/cm²)."""
         return sum(scr.total_mass_change for scr in self.sub_cycle_runs)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict, with each sub-cycle run as a nested dict."""
+        return dataclass_to_dict(self)
 
 
 @dataclass
@@ -423,6 +506,14 @@ class CycleCollection:
             all_steps = [s for s in all_steps if s.sub_cycle_index == sub_cycle]
         return all_steps
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: ``{"cycles": [...], "recipe": {...}}``.
+
+        Includes every step, excluded ones too, with its full time and mass
+        arrays.
+        """
+        return dataclass_to_dict(self)
+
 
 # ── Kinetics results ──────────────────────────────────────────────────────────
 
@@ -477,6 +568,13 @@ class LangmuirResult:
     sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: NaN becomes None, covariance a nested list.
+
+        :func:`~qcm_pak.export.save_full_export` accepts the result as a fit.
+        """
+        return dataclass_to_dict(self)
+
 
 @dataclass
 class EtchResult:
@@ -525,6 +623,13 @@ class EtchResult:
     sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict: NaN becomes None, covariance a nested list.
+
+        :func:`~qcm_pak.export.save_full_export` accepts the result as a fit.
+        """
+        return dataclass_to_dict(self)
+
 
 # ── Top-level result container ────────────────────────────────────────────────
 
@@ -534,7 +639,8 @@ class AnalysisResult:
     """Container returned by :func:`~qcm_pak.pipeline.run_analysis`.
 
     All intermediate results are accessible as plain Python objects for
-    downstream computation. Call :meth:`save` to write files to disk.
+    downstream computation. Call :meth:`save` to write files to disk, or
+    :meth:`to_bytes` to get the same files in memory.
 
     Parameters
     ----------
@@ -552,6 +658,15 @@ class AnalysisResult:
     mass_data: MassDataset
     cycle_index: CycleIndex
     params: ALDParameters
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the whole result to a JSON-safe dict.
+
+        Keys are ``cycles``, ``mass_data``, ``cycle_index`` and ``params``,
+        each as its own ``to_dict()`` returns it. Arrays become lists, so for
+        a long run this is large. Figures are not included.
+        """
+        return dataclass_to_dict(self)
 
     def save(self, output_dir: str | Path) -> None:
         """Write analysis outputs to ``output_dir``.
@@ -576,40 +691,62 @@ class AnalysisResult:
         output_dir:
             Directory to write outputs into. Created if it does not exist.
         """
+        out = Path(output_dir)
+        (out / "data").mkdir(parents=True, exist_ok=True)
+        (out / "figures").mkdir(parents=True, exist_ok=True)
+        for name, content in self.to_bytes().items():
+            (out / name).write_bytes(content)
+
+    def to_bytes(self) -> dict[str, bytes]:
+        """Produce the files :meth:`save` writes, in memory.
+
+        Nothing touches the disk, so a server can return or zip the files
+        without a temporary directory per request.
+
+        Returns
+        -------
+        dict[str, bytes]
+            Relative path, as :meth:`save` lays it out (for example
+            ``"data/cycle_data_TMA.tsv"`` or ``"figures/full_trace.png"``),
+            mapped to the file's contents. Writing each entry under a
+            directory gives byte-for-byte what :meth:`save` writes there.
+        """
         from qcm_pak import visualization
 
-        out = Path(output_dir)
-        data_dir = out / "data"
-        fig_dir = out / "figures"
-        data_dir.mkdir(parents=True, exist_ok=True)
-        fig_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write per-step TSV files
+        files: dict[str, bytes] = {}
         for step_name in self.cycles.recipe.step_names():
             step_results = self.cycles.steps(name=step_name)
             if not step_results:
                 continue
-            _write_step_tsv(step_results, data_dir / f"cycle_data_{step_name}.tsv")
+            files[f"data/cycle_data_{step_name}.tsv"] = _step_tsv_bytes(step_results)
 
-        # Write diagnostic figures
-        trace_fig = visualization.plot_trace(self.mass_data, self.cycle_index)
-        trace_fig.savefig(fig_dir / "full_trace.png", dpi=150, bbox_inches="tight")
-        trace_fig.clf()
-
-        deriv_fig = visualization.plot_derivative(self.mass_data)
-        deriv_fig.savefig(
-            fig_dir / "derivative_analysis.png", dpi=150, bbox_inches="tight"
+        files["figures/full_trace.png"] = _png_bytes(
+            visualization.plot_trace(self.mass_data, self.cycle_index)
         )
-        deriv_fig.clf()
+        files["figures/derivative_analysis.png"] = _png_bytes(
+            visualization.plot_derivative(self.mass_data)
+        )
+        return files
 
 
-def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
-    """Write a collection of StepResults to a TSV file.
+def _png_bytes(fig: Figure) -> bytes:
+    """Render ``fig`` as PNG with the settings :meth:`AnalysisResult.save` uses."""
+    import io
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    return buf.getvalue()
+
+
+def _step_tsv_bytes(steps: list[StepResult]) -> bytes:
+    """Format a collection of StepResults as a UTF-8 TSV file.
 
     Each column is one step occurrence; rows are time-point samples aligned
     to the step onset (time[0] = 0). The header row lists each occurrence as
     ``cycle_{outer}_sc{sub_cycle}_run{run}``.
     """
+    import io
+
     import pandas as pd
 
     # Align on a common time axis using the shortest window
@@ -621,4 +758,14 @@ def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
         col = f"cycle_{s.outer_cycle}_sc{s.sub_cycle_index}_run{s.sub_cycle_run}"
         data[col] = s.mass_corrected[:min_len]
 
-    pd.DataFrame(data).to_csv(path, sep="\t", index=False)
+    buf = io.StringIO()
+    pd.DataFrame(data).to_csv(buf, sep="\t", index=False)
+    return buf.getvalue().encode("utf-8")
+
+
+def _write_step_tsv(steps: list[StepResult], path: Path) -> None:
+    """Write a collection of StepResults to a TSV file (see :func:`_step_tsv_bytes`).
+
+    Also used by :func:`~qcm_pak.export.save_full_export`.
+    """
+    path.write_bytes(_step_tsv_bytes(steps))

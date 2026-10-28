@@ -20,9 +20,10 @@ Time mode summary
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,8 @@ from numpy.typing import NDArray
 
 from qcm_pak._types import QCMDataset
 from qcm_pak.exceptions import DataLoadError
+from qcm_pak.sampling import analyze_sampling
+from qcm_pak.serialization import dataclass_kwargs, dataclass_to_dict
 
 _FREQ_FACTORS: dict[str, float] = {
     "Hz": 1.0,
@@ -122,6 +125,19 @@ class ColumnSpec:
         if self.skiprows < 0:
             raise ValueError(f"skiprows must be >= 0, got {self.skiprows}")
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a JSON-safe dict; :meth:`from_dict` reverses it."""
+        return dataclass_to_dict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ColumnSpec:
+        """Build a ColumnSpec from a dict such as :meth:`to_dict` returns.
+
+        Keys left out keep their defaults. Raises ``ValueError`` for unknown
+        or missing keys.
+        """
+        return cls(**dataclass_kwargs(cls, data))
+
 
 def load_data(path: str | Path, spec: ColumnSpec) -> QCMDataset:
     """Read a QCM data file and return a :class:`~qcm_pak._types.QCMDataset`.
@@ -183,6 +199,7 @@ def load_data(path: str | Path, spec: ColumnSpec) -> QCMDataset:
             frequency=frequency,
             temperature=temperature,
             source_path=path,
+            sampling=analyze_sampling(time, frequency),
         )
     except ValueError as exc:
         raise DataLoadError(str(exc)) from exc

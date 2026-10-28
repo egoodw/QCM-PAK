@@ -47,6 +47,8 @@ result = qcm.run_analysis(params, spec)
 
 # Write data/ and figures/ directories
 result.save("output/")
+# ...or get the same files in memory: {"data/cycle_data_TMA.tsv": b"...", ...}
+files = result.to_bytes()
 
 # Optional: fit Langmuir kinetics
 langmuir = qcm.fit_langmuir(result.cycles, step="TMA", model="bi")
@@ -145,6 +147,30 @@ spec = qcm.ColumnSpec(freq_col="freq", time_col="time", time_unit="minutes", tem
 ```
 
 Supported `time_unit` values: `"seconds"`, `"milliseconds"`, `"minutes"`, `"hours"`, `"datetime"`, `"clock"`.
+
+## JSON
+
+Every data and result class has `to_dict()`, which returns plain dicts,
+lists, numbers and strings that `json.dumps()` accepts. Arrays become lists
+and NaN becomes `None`. The settings classes (`Recipe`, `SubCycle`,
+`PulseStep`, `ColumnSpec`, `SauerbreyConstants`, `DetectionParameters`,
+`ALDParameters`) and `PulseCorrection` also have `from_dict()`, so a run can
+be set up from a JSON file or a web request:
+
+```python
+import json
+
+with open("recipe.json") as f:
+    recipe = qcm.Recipe.from_dict(json.load(f))
+
+json.dumps(recipe.to_dict())          # and back
+json.dumps(langmuir.to_dict())        # a fit result
+json.dumps(result.to_dict())          # everything: cycles, mass trace, onsets, settings
+```
+
+`from_dict()` raises `ValueError` for a misspelt or missing key instead of
+ignoring it. For a dict or list holding several results, such as
+`{"TMA": {"langmuir_mono": fit}}`, use `qcm.serialization.to_jsonable()`.
 
 ## License
 
