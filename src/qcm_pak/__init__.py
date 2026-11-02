@@ -77,6 +77,16 @@ from qcm_pak.parameters import (
 )
 from qcm_pak.pipeline import run_analysis
 from qcm_pak.recipe import PulseStep, Recipe, SubCycle
+from qcm_pak.residuals import (
+    FitResiduals,
+    ModelResiduals,
+    ResidualStats,
+    ResidualSummary,
+    ResidualTrace,
+    aggregate_traces,
+    collect_residuals,
+    summarize_residuals,
+)
 from qcm_pak.sauerbrey import frequency_to_mass
 
 __all__ = [
@@ -110,6 +120,12 @@ __all__ = [
     "LangmuirResult",
     "EtchResult",
     "GrowthSwitchResult",
+    # Types — residuals
+    "FitResiduals",
+    "ModelResiduals",
+    "ResidualStats",
+    "ResidualSummary",
+    "ResidualTrace",
     # Types — top level
     "AnalysisResult",
     # Functions
@@ -127,6 +143,9 @@ __all__ = [
     "find_growth_switch",
     "detect_growth_switch",
     "estimate_cycle_noise",
+    "collect_residuals",
+    "summarize_residuals",
+    "aggregate_traces",
     "save_full_export",
     "build_analysis_report",
     # Models

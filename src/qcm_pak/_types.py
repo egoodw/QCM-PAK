@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
     from qcm_pak.parameters import ALDParameters
+    from qcm_pak.residuals import FitResiduals
 
 
 # ── Raw and converted data ────────────────────────────────────────────────────
@@ -547,6 +548,11 @@ class LangmuirResult:
         run). ``None`` for the ensemble-averaged fit from
         :func:`~qcm_pak.kinetics.fit_langmuir`, which isn't tied to one cycle.
 
+    residuals:
+        Residual traces of the ensemble fit (observed, fitted and residual per
+        occurrence, plus mean/σ/n): see :class:`~qcm_pak.residuals.FitResiduals`.
+        Set by the ensemble fit function; ``None`` for per-cycle fits.
+
     Notes
     -----
     Monomodal model: θ(t) = θ_max · (1 − exp(−k · t))
@@ -567,6 +573,7 @@ class LangmuirResult:
     outer_cycle: int | None = None
     sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
+    residuals: FitResiduals | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-safe dict: NaN becomes None, covariance a nested list.
@@ -605,6 +612,11 @@ class EtchResult:
         :func:`~qcm_pak.kinetics.fit_etch_per_cycle`. ``None`` for the
         ensemble-averaged fit from :func:`~qcm_pak.kinetics.fit_etch`.
 
+    residuals:
+        Residual traces of the ensemble fit (observed, fitted and residual per
+        occurrence, plus mean/σ/n): see :class:`~qcm_pak.residuals.FitResiduals`.
+        Set by the ensemble fit function; ``None`` for per-cycle fits.
+
     Notes
     -----
     Saturating model: E(t) = E_max · (1 − exp(−k · t))  [self-limiting ALE]
@@ -622,6 +634,7 @@ class EtchResult:
     outer_cycle: int | None = None
     sub_cycle_index: int | None = None
     sub_cycle_run: int | None = None
+    residuals: FitResiduals | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a JSON-safe dict: NaN becomes None, covariance a nested list.

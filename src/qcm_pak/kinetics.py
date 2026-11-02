@@ -41,6 +41,7 @@ from numpy.typing import NDArray
 
 from qcm_pak._types import CycleCollection, EtchResult, LangmuirResult
 from qcm_pak.exceptions import ConvergenceError
+from qcm_pak.residuals import residuals_for_fit
 
 # ── Langmuir fitting ──────────────────────────────────────────────────────────
 
@@ -89,6 +90,8 @@ def fit_langmuir(
     LangmuirResult
         Fit parameters. ``result.model`` may be ``"mono"`` even if ``"bi"``
         was requested (auto-fallback on collinearity even with ``force=True``).
+        ``result.residuals`` holds the observed, ensemble-fitted and residual
+        traces of every occurrence (see :mod:`qcm_pak.residuals`).
 
     Raises
     ------
@@ -108,10 +111,13 @@ def fit_langmuir(
     t_vals, theta_vals = _langmuir_dataset(step_results)
 
     if model == "bi":
-        return _fit_langmuir_bi(
+        result = _fit_langmuir_bi(
             step, t_vals, theta_vals, k_bounds, theta_bounds, force=force
         )
-    return _fit_langmuir_mono(step, t_vals, theta_vals, k_bounds, theta_bounds)
+    else:
+        result = _fit_langmuir_mono(step, t_vals, theta_vals, k_bounds, theta_bounds)
+    result.residuals = residuals_for_fit(result, step_results, sub_cycle)
+    return result
 
 
 def fit_langmuir_per_cycle(
@@ -404,6 +410,8 @@ def fit_etch(
     -------
     EtchResult
         Fit parameters. ``etch_max`` and ``rate`` are always positive.
+        ``result.residuals`` holds the observed, ensemble-fitted and residual
+        traces of every occurrence (see :mod:`qcm_pak.residuals`).
 
     Raises
     ------
@@ -427,8 +435,11 @@ def fit_etch(
     )
 
     if model == "linear":
-        return _fit_etch_linear(step, t_vals, etch_vals, etch_bounds)
-    return _fit_etch_saturating(step, t_vals, etch_vals, k_bounds, etch_bounds)
+        result = _fit_etch_linear(step, t_vals, etch_vals, etch_bounds)
+    else:
+        result = _fit_etch_saturating(step, t_vals, etch_vals, k_bounds, etch_bounds)
+    result.residuals = residuals_for_fit(result, step_results, sub_cycle)
+    return result
 
 
 def fit_etch_per_cycle(
