@@ -5,6 +5,19 @@ All notable changes to QCM-PAK are documented here.
 ## [Unreleased]
 
 ### Added
+- Fit residual traces. `fit_langmuir` and `fit_etch` now set
+  `result.residuals` (`FitResiduals`): for every occurrence of the step, the
+  data (`|mass_corrected|`), the ensemble fitted curve and the residual
+  (data minus fit, ng/cm²) on that occurrence's own time axis from pulse
+  onset, out to the end of the fitted window, with a per-trace RMSE and the
+  per-step mean, standard deviation and n. `collect_residuals(cycles,
+  model_id)` fits every matching step of a recipe (A/B, ABC, super cycles;
+  sub-cycle runs stay distinguishable) and returns the per-step sets plus a
+  cross-step `ResidualSummary`; `summarize_residuals` and `aggregate_traces`
+  build the aggregates from stored traces on a common time grid (finest
+  sampling step, no truncation to the shortest window, n recorded per point).
+  Fitting and existing result fields are unchanged; `to_dict()` of an ensemble
+  result gains a `residuals` key.
 agent/growth-switch
 - `find_growth_switch()` and `detect_growth_switch()` find the cycle where a
   run switches from no growth or mass loss to steady mass gain (incubation),
