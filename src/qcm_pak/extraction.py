@@ -101,7 +101,8 @@ def _last_window_end(
     _, sc_index, _, s_index = recipe.event_position(event_position)
     step = recipe.sub_cycles[sc_index].steps[s_index]
     stop = data.time[onset_idx] + step.pulse + step.purge
-    return int(np.clip(np.searchsorted(data.time, stop, side="right"), onset_idx + 1, n))
+    end = int(np.searchsorted(data.time, stop, side="right"))
+    return int(np.clip(end, onset_idx + 1, n))
 
 
 def _extract_step(
