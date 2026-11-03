@@ -61,10 +61,14 @@ def extract_cycles(
     }
 
     # Build StepResult objects from onset list
-    # Each onset's window ends at the next onset (or end of array)
+    # Each onset's window ends at the next onset; the last one ends after its
+    # recipe length (or at the end of the array, whichever comes first)
     step_results: list[StepResult] = []
     for i, (step_name, onset_idx) in enumerate(onsets):
-        end_idx = onsets[i + 1][1] if i + 1 < len(onsets) else n
+        if i + 1 < len(onsets):
+            end_idx = onsets[i + 1][1]
+        else:
+            end_idx = _last_window_end(data, recipe, i, onset_idx, n)
         step_results.append(
             _extract_step(
                 data=data,
@@ -88,6 +92,16 @@ def extract_cycles(
         cycles.append(Cycle(cycle_number=outer, sub_cycle_runs=sub_cycle_runs))
 
     return CycleCollection(cycles=cycles, recipe=recipe)
+
+
+def _last_window_end(
+    data: MassDataset, recipe: Recipe, event_position: int, onset_idx: int, n: int
+) -> int:
+    """End index of the final event's window: onset + pulse + purge, capped at *n*."""
+    _, sc_index, _, s_index = recipe.event_position(event_position)
+    step = recipe.sub_cycles[sc_index].steps[s_index]
+    stop = data.time[onset_idx] + step.pulse + step.purge
+    return int(np.clip(np.searchsorted(data.time, stop, side="right"), onset_idx + 1, n))
 
 
 def _extract_step(
