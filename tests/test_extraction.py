@@ -16,9 +16,10 @@ def _synthetic_ald_full(
     start_time: float = 10.0,
     step_dur: float = 30.0,
     mass_per_step: float = 1.5,
+    tail_s: float = 5.0,
 ) -> tuple[MassDataset, Recipe]:
     rng = np.random.default_rng(0)
-    total_s = start_time + 2 * step_dur * n_cycles + 5.0
+    total_s = start_time + 2 * step_dur * n_cycles + tail_s
     time = np.arange(0, total_s, dt)
     mass = np.zeros(len(time))
 
@@ -54,6 +55,25 @@ def test_cycle_count(tmp_path) -> None:
     index = detect_pulses(data, params, det)
     cycles = extract_cycles(data, index, params)
     assert len(cycles) == 5
+
+
+def test_last_step_stops_at_its_recipe_length_when_the_log_runs_on(tmp_path) -> None:
+    # The logger keeps recording long after the recipe ends. The final step has no
+    # next onset, so it must end after pulse + purge, not at the end of the file.
+    data, recipe = _synthetic_ald_full(n_cycles=4, tail_s=5000.0)
+    dummy = tmp_path / "d.csv"
+    dummy.write_text("t,f\n")
+    params = ALDParameters(input_file=dummy, recipe=recipe)
+    index = detect_pulses(data, params, DetectionParameters(recipe_tolerance=0.4))
+    cycles = extract_cycles(data, index, params)
+
+    last = cycles.steps(name="B")[-1]
+    assert last.time[-1] <= 30.0 + 1e-9
+    assert last.time[-1] >= 29.0
+    assert len(last.mass_corrected) == len(last.time) == len(last.mass_raw)
+    # a step that ends at a next onset is unchanged
+    first = cycles.steps(name="A")[0]
+    assert first.time[-1] == pytest.approx(29.5, abs=1.0)
 
 
 def test_sub_cycle_runs_per_cycle(tmp_path) -> None:

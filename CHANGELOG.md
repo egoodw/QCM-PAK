@@ -4,6 +4,13 @@ All notable changes to QCM-PAK are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- The last step of a run is no longer extracted to the end of the data. It had
+  no next onset, so a log that kept recording after the recipe ended gave it a
+  window hours long (for example 144,570 s), which stretched any plot that
+  averages or overlays that step. It now ends after its recipe length (pulse
+  plus purge), or at the end of the data if that comes first.
+
 ### Added
 - Fit residual traces. `fit_langmuir` and `fit_etch` now set
   `result.residuals` (`FitResiduals`): for every occurrence of the step, the
