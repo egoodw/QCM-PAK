@@ -104,9 +104,9 @@ def test_save_full_export_writes_core_files(tmp_path) -> None:
         "analysis_report.txt",
         "figures/1_trace/full_trace.png",
         "figures/1_trace/derivative_analysis.png",
-        "figures/1_trace/detailed_cycles_first.png",
-        "figures/1_trace/detailed_cycles_middle.png",
-        "figures/1_trace/detailed_cycles_last.png",
+        "figures/2_cycles/detailed_cycles_first.png",
+        "figures/2_cycles/detailed_cycles_middle.png",
+        "figures/2_cycles/detailed_cycles_last.png",
         "figures/3_mass_gain/mass_change_per_cycle.png",
         "figures/3_mass_gain/cumulative_growth.png",
         "data/raw/full_trace.csv",
@@ -124,7 +124,7 @@ def test_save_full_export_batches_cycle_figures(tmp_path) -> None:
     save_full_export(out, data, index, cycles, params, cycle_batch_size=3)
 
     # 6 cycles / batch_size 3 -> two batches
-    batch = out / "figures" / "2_pulse_detection"
+    batch = out / "figures" / "2_cycles"
     assert (batch / "cycles_0001-0003" / "A_cycles.png").is_file()
     assert (batch / "cycles_0001-0003" / "A_average.png").is_file()
     assert (batch / "cycles_0001-0003" / "A_timing.png").is_file()
@@ -175,7 +175,7 @@ def test_export_tree_is_one_layout_without_tsv(tmp_path) -> None:
     top = {n.split("/")[0] for n in names}
     assert top == {"README.txt", "analysis_report.txt", "figures", "data"}
     assert {n.split("/")[1] for n in names if n.startswith("figures/")} == {
-        "1_trace", "2_pulse_detection", "3_mass_gain", "4_monomodal",
+        "1_trace", "2_cycles", "3_mass_gain", "4_monomodal",
     }
     for name in [
         "figures/4_monomodal/langmuir_fit_A.png",
@@ -251,7 +251,8 @@ def test_fit_summary_columns_and_rows(tmp_path, as_dicts) -> None:
     assert list(s.index) == [1, 2, 3, 4, 5, 6]
     for col in [
         "cycle_t_start_s", "cycle_partial", "mass_gain_ng_cm2",
-        "cumulative_growth_ng_cm2",
+        "cumulative_growth_total_ng_cm2", "cumulative_growth_A_ng_cm2",
+        "cumulative_growth_B_ng_cm2",
         "A_pulse_onset_time_s", "A_pulse_confidence", "A_excluded",
         "A_mass_change_ng_cm2", "B_pulse_onset_time_s",
         "A_mono_k_per_s", "A_mono_theta_max_ng_cm2", "A_mono_r2",
@@ -261,7 +262,7 @@ def test_fit_summary_columns_and_rows(tmp_path, as_dicts) -> None:
     assert not [c for c in s.columns if c.startswith("B_mono")]
     np.testing.assert_allclose(s["mass_gain_ng_cm2"].iloc[:5], 3.0, atol=0.2)
     np.testing.assert_allclose(
-        s["cumulative_growth_ng_cm2"], s["mass_gain_ng_cm2"].cumsum(), atol=1e-6
+        s["cumulative_growth_total_ng_cm2"], s["mass_gain_ng_cm2"].cumsum(), atol=1e-6
     )
     # rmse is the library's own number for each trace
     np.testing.assert_allclose(
@@ -306,3 +307,73 @@ def test_occurrence_labels_number_repeated_runs() -> None:
     from qcm_pak.export_tables import occurrence_labels
 
     assert occurrence_labels([0, 1, 1, 2]) == ["1", "2.1", "2.2", "3"]
+
+
+def test_cumulative_growth_per_step(tmp_path) -> None:
+    out, _, _, pd = _export(tmp_path)
+    s = pd.read_csv(out / "data" / "fit_summary.csv", index_col="cycle")
+    a = s["cumulative_growth_A_ng_cm2"]
+    b = s["cumulative_growth_B_ng_cm2"]
+    # each step adds 1.5 ng/cm2 a cycle in the synthetic run
+    np.testing.assert_allclose(a.iloc[:5], 1.5 * np.arange(1, 6), atol=0.3)
+    np.testing.assert_allclose(b.iloc[:5], 1.5 * np.arange(1, 6), atol=0.3)
+    # per step running sums are the running sums of the per-step mass change
+    np.testing.assert_allclose(
+        a, s["A_mass_change_ng_cm2"].fillna(0).cumsum(), atol=1e-6
+    )
+    # and add up to the measured total
+    np.testing.assert_allclose(
+        (a + b).iloc[:5], s["cumulative_growth_total_ng_cm2"].iloc[:5], atol=0.5
+    )
+    assert "cumulative_growth_ng_cm2" not in s.columns
+
+
+def test_every_step_and_model_has_populated_wide_fit_traces(tmp_path) -> None:
+    """Fit and fit-loss traces: every step, both models, every cycle."""
+    import pandas as pd
+
+    data, params, index, cycles = _built_pipeline(tmp_path, n_cycles=6)
+    fits, per_cycle = {}, {}
+    for step in ("A", "B"):
+        fits[step], per_cycle[step] = {}, {}
+        for model, mid in (("mono", "langmuir_mono"), ("bi", "langmuir_bi")):
+            res = fit_langmuir(cycles, step, model=model)
+            assert res.residuals is not None, (step, model)
+            fits[step][mid] = res
+            per_cycle[step][mid] = fit_langmuir_per_cycle(cycles, step, model=model)
+    out = tmp_path / "output"
+    save_full_export(out, data, index, cycles, params, fits, per_cycle,
+                     cycle_batch_size=3)
+
+    cols = ["time_s", "1", "2", "3", "4", "5", "6"]
+    for step in ("A", "B"):
+        for short in ("mono", "bi"):
+            for kind, extra in (("fit", []), ("fit_loss", ["mean", "sd", "n"])):
+                path = out / "data" / "traces" / f"{step}_{kind}_{short}.csv"
+                assert path.is_file(), path.name
+                t = pd.read_csv(path)
+                assert list(t.columns) == cols + extra, path.name
+                assert len(t) > 10, path.name
+                for c in cols[1:]:  # every cycle column holds numbers
+                    assert t[c].notna().sum() > 10, (path.name, c)
+    # no old-style long fit-loss or average files anywhere
+    names = _tree(out)
+    assert not [n for n in names if "fit_loss_average" in n or "fit_loss_per_cycle" in n]
+    assert not [n for n in names if n.endswith(".tsv")]
+
+
+def test_per_cycle_figures_live_in_one_folder(tmp_path) -> None:
+    out, _, _, _ = _export(tmp_path)
+    names = _tree(out)
+    assert not [n for n in names if "/cycles_" in n and "/2_cycles/" not in n]
+    assert not [n for n in names if "detailed_cycles" in n and "/2_cycles/" not in n]
+
+
+def test_readme_explains_fit_loss_and_columns(tmp_path) -> None:
+    out, _, _, _ = _export(tmp_path)
+    text = (out / "README.txt").read_text()
+    assert "How to read fit loss" in text
+    assert "fit minus data" in text and "ng/cm2" in text
+    for col in ("cumulative_growth_total_ng_cm2", "cumulative_growth_<step>_ng_cm2",
+                "fit_loss_rmse_ng_cm2", "<step>_<m>_r2"):
+        assert col in text, col

@@ -139,16 +139,47 @@ data/traces/<step>_fit_loss_<m>.csv
                                  and n of the cycles at each time
 data/traces/cycle_mass_change.csv
                                  mass change since the cycle started
-data/fit_summary.csv             one row per cycle: fit parameters, R2, fit
-                                 loss RMSE, mass gain, cumulative growth,
-                                 pulse onset time and confidence
+data/fit_summary.csv             one row per cycle (see the columns below)
 
-In the trace files each column after time_s is one cycle, named by its
-number (7, or 7.1 and 7.2 where a step runs twice in a cycle). Columns end
-earlier when a cycle has less data. A fit curve is the ensemble fit of all
-cycles evaluated on that cycle's time axis; per-cycle parameters are in
-fit_summary.csv. The fit loss RMSE is that ensemble fit against the cycle.
-Units are part of the column names in fit_summary.csv (_per_s, _ng_cm2).
+Trace files: each column after time_s is one cycle, named by its number
+(7, or 7.1 and 7.2 where a step runs twice in a cycle). time_s is zero at
+the pulse onset. A column ends earlier when its cycle has less data. A fit
+curve is the ensemble fit of all cycles, evaluated on that cycle's time axis;
+the per-cycle parameters are in fit_summary.csv.
+
+How to read fit loss
+--------------------
+Fit loss says how far a fit is from what was measured, at each moment after
+the pulse. It is fit minus data, in ng/cm2. Above zero the fit sits higher
+than the measurement; below zero, lower. Noise alone scatters around zero. A
+smooth arc, the same in every cycle, means the model has the wrong shape.
+Example: +0.4 at 2 s in column 7 means the fit is 0.4 ng/cm2 above the
+measured mass 2 s after the pulse of cycle 7.
+In <step>_fit_loss_<m>.csv the columns mean, sd and n are the average of the
+cycle columns at that time, their standard deviation, and how many cycles
+were averaged (n). That average is the "average fit loss" of the step. The
+fit loss RMSE in fit_summary.csv is the root mean square of one cycle's
+column, in ng/cm2: one number per cycle for how well the fit matches it.
+
+fit_summary.csv columns (the unit is part of the name)
+------------------------------------------------------
+cycle                                 cycle number, from 1
+cycle_t_start_s, cycle_partial        when the cycle starts; true if the data
+                                      ends before the cycle does
+mass_gain_ng_cm2                      mass change over the cycle
+cumulative_growth_total_ng_cm2        measured mass since the recipe start
+cumulative_growth_<step>_ng_cm2       running sum of that step's own mass
+                                      change (a step that loses mass goes down)
+<step>_mass_change_ng_cm2             mass change of the step in that cycle
+<step>_excluded                       true if the pulse was excluded
+<step>_pulse_onset_time_s, _pulse_confidence
+                                      detected onset time and its confidence
+<step>_<m>_<parameter>                per-cycle fit parameters: mono has
+                                      k (1/s) and theta_max (ng/cm2); bi has
+                                      k1, k2 (1/s) and theta1, theta2 (ng/cm2)
+<step>_<m>_r2                         R2 of the cycle's fit
+<step>_<m>_fit_loss_rmse_ng_cm2       RMSE of the fit loss for the cycle
+A step that runs twice in a cycle also gets columns starting <step>_run2_.
 """
 
 
@@ -170,7 +201,8 @@ def save_full_export(
     Layout (see ``README.txt`` in the output)::
 
         README.txt  analysis_report.txt  diagnostics/ (written by the caller)
-        figures/1_trace  2_pulse_detection/cycles_NNNN-NNNN  3_mass_gain
+        figures/1_trace  2_cycles (detailed_cycles_*, cycles_NNNN-NNNN/)
+                 3_mass_gain
                  4_monomodal  5_bimodal  6_etch
         data/raw/full_trace.csv
         data/traces/<step>_mass.csv, <step>_fit_<model>.csv,
@@ -234,16 +266,16 @@ def save_full_export(
     )
     (out / "README.txt").write_text(README)
 
-    # ── 1_trace: full trace, derivative, detailed first/middle/last ─────
+    # ── 1_trace: full trace, derivative ─────────────────────────────────
     save(viz.plot_trace(mass_data, cycle_index), "1_trace", "full_trace.png")
     save(viz.plot_derivative(mass_data), "1_trace", "derivative_analysis.png")
     for location in ("first", "middle", "last"):
         fig = viz.plot_detailed_cycles(
             mass_data, cycle_index, location=location, n_cycles=10
         )
-        save(fig, "1_trace", f"detailed_cycles_{location}.png")
+        save(fig, "2_cycles", f"detailed_cycles_{location}.png")
 
-    # ── 2_pulse_detection: cycle-batched overlay / average / timing ─────
+    # ── 2_cycles: detailed cycles, then cycle-batched overlay / average / timing ──
     # Figures accumulate fast here (steps x batches x 3 plot types). The
     # visualization functions don't register them with pyplot, so each one
     # is freed as soon as ``fig`` moves on to the next; nothing to close.
@@ -264,7 +296,7 @@ def save_full_export(
                 ),
             }
             for kind, fig in figs.items():
-                save(fig, "2_pulse_detection", folder, f"{step_name}_{kind}.png")
+                save(fig, "2_cycles", folder, f"{step_name}_{kind}.png")
 
     # ── Model figures: fit plots, drift plots ───────────────────────────
     for step_name, step_fits in fits.items():
@@ -325,8 +357,6 @@ def save_full_export(
              trace_dir / "cycle_mass_change.csv")
         save(traces.plot_mass_change_per_cycle(gain),
              "3_mass_gain", "mass_change_per_cycle.png")
-        save(traces.plot_cumulative_growth(gain),
-             "3_mass_gain", "cumulative_growth.png")
 
     # ── data/fit_summary ────────────────────────────────────────────────
     summary = tables.fit_summary_table(
@@ -334,6 +364,13 @@ def save_full_export(
         extra_cycle_columns,
     )
     _csv(summary, data_dir / "fit_summary.csv", index=True)
+    growth_cols = [
+        c for c in summary.columns
+        if c.startswith("cumulative_growth_") and c.endswith("_ng_cm2")
+    ]
+    if not gain.empty and growth_cols:
+        save(traces.plot_cumulative_growth(summary[growth_cols]),
+             "3_mass_gain", "cumulative_growth.png")
     if fit_summary_xlsx:
         tables.write_fit_summary_xlsx(
             data_dir / "fit_summary.csv", data_dir / "fit_summary.xlsx"
