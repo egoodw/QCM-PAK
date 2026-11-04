@@ -11,14 +11,22 @@ All notable changes to QCM-PAK are documented here.
   averages or overlays that step. It now ends after its recipe length (pulse
   plus purge), or at the end of the data if that comes first.
 
+### Changed
+- `save_full_export` writes one tree and no TSV. Figures are in numbered
+  folders under `figures/` (`1_trace`, `2_pulse_detection`, `3_mass_gain`,
+  `4_monomodal`, `5_bimodal`, `6_etch`). Numbers are CSV: `data/raw/full_trace.csv`;
+  wide traces in `data/traces/` (time_s, then one column per cycle:
+  `<step>_mass`, `<step>_fit_<model>`, `<step>_fit_loss_<model>` as fit minus
+  data with mean/sd/n, `cycle_mass_change`); and `data/fit_summary.csv`, one
+  row per cycle with the fit parameters (units in the column names), R2,
+  fit-loss RMSE, mass gain, cumulative growth, pulse onset and confidence.
+  New options `extra_cycle_columns`, `include_original` (copies the input file
+  to `data/raw/`) and `fit_summary_xlsx` (needs the optional `openpyxl`), and
+  a `README.txt`. This replaces the `cycle_data_*`, `pulse_times_*`, per-cycle
+  fit, `fit_loss_*`, `mass_gain_traces` and `cumulative_growth` TSVs.
+  `AnalysisResult.save()` is unchanged. New module `qcm_pak.export_tables`.
+
 ### Added
-- `save_full_export` now writes fit-loss and mass-gain traces. Fit loss (fit
-  minus data, ng/cm²): `data/fit_loss_<step>_<model>.tsv` (outer_cycle,
-  sub_cycle_run, time_s, data, fitted, residual), `data/fit_loss_average.tsv`
-  and `figures/modelling/<step>_<model>_fit_loss.png`, for fits that carry
-  `residuals`. Mass gain: `data/mass_gain_traces.tsv` (mass change over time in
-  each cycle and cumulative growth), `data/cumulative_growth.tsv` and two
-  figures. Every file the export wrote before is still written.
 - Fit residual traces. `fit_langmuir` and `fit_etch` now set
   `result.residuals` (`FitResiduals`): for every occurrence of the step, the
   data (`|mass_corrected|`), the ensemble fitted curve and the residual
