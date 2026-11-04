@@ -286,8 +286,8 @@ def test_fit_dicts_work_with_the_full_export(tmp_path: Path) -> None:
     out = tmp_path / "out"
     save_full_export(out, r.mass_data, r.cycle_index, r.cycles, r.params, fits,
                      per_cycle, cycle_batch_size=2)
-    assert (out / "figures" / "modelling" / "A_langmuir_mono.png").is_file()
-    assert (out / "figures" / "modelling" / "A_langmuir_mono_k_drift.png").is_file()
+    assert (out / "figures" / "4_monomodal" / "A_langmuir_mono.png").is_file()
+    assert (out / "figures" / "4_monomodal" / "A_langmuir_mono_k_drift.png").is_file()
 
 
 # ── The helper itself ───────────────────────────────────────────────────────

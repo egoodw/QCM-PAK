@@ -1,8 +1,9 @@
 """Fit-loss and mass-gain traces for the full analysis export.
 
 Everything here turns data the analysis already holds into tables and
-figures; nothing is refitted. :func:`~qcm_pak.export.save_full_export` calls
-these helpers.
+figures; nothing is refitted. Trace files are wide: column 1 time_s (zero at
+each pulse onset) and one column per cycle, headed by its 1-based number.
+:func:`~qcm_pak.export.save_full_export` calls these helpers.
 
 Sign convention: the library stores residuals as ``data - fit``
 (:class:`~qcm_pak.residuals.ResidualTrace`); the exported files use the web
@@ -12,6 +13,7 @@ All masses are ng/cm².
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -21,22 +23,6 @@ from matplotlib.figure import Figure
 
 from qcm_pak._types import CycleCollection, CycleIndex, MassDataset
 
-FIT_LOSS_COLUMNS = [
-    "outer_cycle",
-    "sub_cycle_run",
-    "time_s",
-    "data_ng_cm2",
-    "fitted_ng_cm2",
-    "residual_fit_minus_data_ng_cm2",
-]
-FIT_LOSS_AVERAGE_COLUMNS = [
-    "step",
-    "model",
-    "time_s",
-    "mean_fit_minus_data_ng_cm2",
-    "sd_ng_cm2",
-    "n_traces",
-]
 MASS_GAIN_COLUMNS = [
     "outer_cycle",
     "time_s",
@@ -46,6 +32,23 @@ MASS_GAIN_COLUMNS = [
     "cumulative_growth_ng_cm2",
     "partial",
 ]
+
+# Fields of a per-cycle fit record that say which occurrence it is, or that are
+# not single numbers; everything else becomes a column of fit_summary.
+_RECORD_SKIP = {
+    "step_name", "model", "outer_cycle", "sub_cycle_index", "sub_cycle_run",
+    "residuals", "covariance",
+}
+_UNITS = {
+    "k": "per_s", "k1": "per_s", "k2": "per_s",
+    "theta_max": "ng_cm2", "theta1": "ng_cm2", "theta2": "ng_cm2",
+    "etch_max": "ng_cm2",
+    "r_squared": "r2",
+}
+# column-name suffix -> unit shown under the header in fit_summary.xlsx
+_XLSX_UNITS = [("_ng_cm2", "ng/cm²"), ("_per_s", "1/s"), ("_s", "s")]
+
+OccKey = tuple[int, int, int]  # outer_cycle, sub_cycle_index, sub_cycle_run
 
 
 def _get(obj: Any, key: str) -> Any:  # noqa: ANN401 (dataclass or dict)
@@ -58,9 +61,19 @@ def _residuals_of(fit: Any) -> Any:  # noqa: ANN401
 
 def _f(values: Any) -> np.ndarray:  # noqa: ANN401
     """List or array to floats; ``None`` (a stored NaN) becomes NaN."""
-    return np.array(
-        [np.nan if v is None else v for v in values], dtype=float
-    )
+    return np.array([np.nan if v is None else v for v in values], dtype=float)
+
+
+def short_model(model_id: str) -> str:
+    """``langmuir_mono`` -> ``mono``, ``langmuir_bi`` -> ``bi``; others as they are."""
+    prefix = "langmuir_"
+    return model_id[len(prefix):] if model_id.startswith(prefix) else model_id
+
+
+def fit_residuals(fit: Any) -> Any:  # noqa: ANN401
+    """The residuals of one fit if it carries traces, else None."""
+    res = _residuals_of(fit)
+    return res if res is not None and _get(res, "traces") else None
 
 
 def iter_fit_loss(
@@ -74,54 +87,256 @@ def iter_fit_loss(
                 yield step_name, model_id, res
 
 
-def fit_loss_table(residuals: Any) -> pd.DataFrame:  # noqa: ANN401
-    """One row per sample of every residual trace (long format)."""
-    frames = []
+def _key(obj: Any) -> OccKey | None:  # noqa: ANN401
+    parts = [_get(obj, n) for n in ("outer_cycle", "sub_cycle_index", "sub_cycle_run")]
+    if parts[0] is None:
+        return None
+    return int(parts[0]), int(parts[1] or 0), int(parts[2] or 0)
+
+
+def occurrence_labels(
+    cycles: CycleCollection, step_names: list[str]
+) -> dict[str, dict[OccKey, str]]:
+    """Column header (and fit_summary row label) of every occurrence of each step.
+
+    Plain 1-based cycle numbers (``7``). When any step is repeated inside one
+    outer cycle (sub-cycles), every label gets the occurrence number after a
+    dot (``7.1``, ``7.2``) so the labels stay unique and consistent across files.
+    """
+    keys: dict[str, dict[int, list[OccKey]]] = {}
+    for name in step_names:
+        per_outer: dict[int, list[OccKey]] = {}
+        for sr in cycles.steps(name=name, include_excluded=True):
+            k = _key(sr)
+            if k is not None and k not in per_outer.setdefault(k[0], []):
+                per_outer[k[0]].append(k)
+        for lst in per_outer.values():
+            lst.sort()
+        keys[name] = per_outer
+    repeated = any(len(lst) > 1 for per in keys.values() for lst in per.values())
+    labels: dict[str, dict[OccKey, str]] = {}
+    for name, per_outer in keys.items():
+        labels[name] = {}
+        for outer, lst in per_outer.items():
+            for n, k in enumerate(lst, start=1):
+                labels[name][k] = f"{outer + 1}.{n}" if repeated else str(outer + 1)
+    return labels
+
+
+def _label_order(label: str) -> tuple[int, int]:
+    head, _, tail = label.partition(".")
+    return int(head), int(tail or 0)
+
+
+def wide_table(series: list[tuple[str, Any, Any]]) -> pd.DataFrame:
+    """``time_s`` plus one column per ``(label, time, values)`` series.
+
+    Every series is read onto the time grid of the first one; where a cycle has
+    no sample at a time the cell is left empty.
+    """
+    series = sorted(series, key=lambda s: _label_order(s[0]))
+    if not series:
+        return pd.DataFrame(columns=["time_s"])
+    ref = _f(series[0][1])
+    data: dict[str, np.ndarray] = {"time_s": ref}
+    for label, t, v in series:
+        t, v = _f(t), _f(v)
+        if t.shape == ref.shape and np.allclose(t, ref, atol=1e-9):
+            data[label] = v
+        else:
+            data[label] = np.interp(ref, t, v, left=np.nan, right=np.nan)
+    return pd.DataFrame(data)
+
+
+def mass_traces(
+    cycles: CycleCollection,
+    step_name: str,
+    labels: Mapping[OccKey, str],
+) -> pd.DataFrame:
+    """Baseline-corrected mass after each pulse of one step, wide (ng/cm²)."""
+    series = []
+    for sr in cycles.steps(name=step_name):
+        k = _key(sr)
+        if k in labels:
+            series.append((labels[k], sr.time, sr.mass_corrected))
+    return wide_table(series)
+
+
+def fit_traces(
+    residuals: Any,  # noqa: ANN401
+    labels: Mapping[OccKey, str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fitted curve and fit loss (fit minus data, ng/cm²) per cycle, wide.
+
+    The library stores residuals as data minus fit, so the loss is negated.
+    """
+    fitted, loss = [], []
     for tr in _get(residuals, "traces") or []:
-        time = _f(_get(tr, "time"))
-        frames.append(
-            pd.DataFrame(
-                {
-                    "outer_cycle": int(_get(tr, "outer_cycle")) + 1,
-                    "sub_cycle_run": int(_get(tr, "sub_cycle_run")),
-                    "time_s": time,
-                    "data_ng_cm2": _f(_get(tr, "observed")),
-                    "fitted_ng_cm2": _f(_get(tr, "fitted")),
-                    # library residual is data - fit; the export is fit - data
-                    "residual_fit_minus_data_ng_cm2": -_f(_get(tr, "residual")),
-                }
-            )
-        )
-    if not frames:
-        return pd.DataFrame(columns=FIT_LOSS_COLUMNS)
-    return pd.concat(frames, ignore_index=True)[FIT_LOSS_COLUMNS]
+        k = _key(tr)
+        if k not in labels:
+            continue
+        fitted.append((labels[k], _get(tr, "time"), _get(tr, "fitted")))
+        loss.append((labels[k], _get(tr, "time"), -_f(_get(tr, "residual"))))
+    return wide_table(fitted), wide_table(loss)
 
 
 def fit_loss_average_table(
-    fits: Mapping[str, Mapping[str, Any]],
+    step_fits: Mapping[str, Any],
 ) -> pd.DataFrame:
-    """Mean and spread of fit minus data per step and model, from stored stats."""
-    frames = []
-    for step_name, model_id, res in iter_fit_loss(fits):
-        stats = _get(res, "stats")
+    """Mean and spread of fit minus data over the cycles, one pair per model."""
+    data: dict[str, np.ndarray] = {}
+    for model_id, fit in step_fits.items():
+        res = _residuals_of(fit)
+        stats = _get(res, "stats") if res is not None else None
         if stats is None:
             continue
-        time = _f(_get(stats, "time"))
-        frames.append(
-            pd.DataFrame(
-                {
-                    "step": step_name,
-                    "model": model_id,
-                    "time_s": time,
-                    "mean_fit_minus_data_ng_cm2": -_f(_get(stats, "mean")),
-                    "sd_ng_cm2": _f(_get(stats, "std")),
-                    "n_traces": np.asarray(_get(stats, "n"), dtype=int),
-                }
-            )
+        if "time_s" not in data:
+            data["time_s"] = _f(_get(stats, "time"))
+        short = short_model(model_id)
+        data[f"{short}_mean_fit_minus_data_ng_cm2"] = -_f(_get(stats, "mean"))
+        data[f"{short}_sd_ng_cm2"] = _f(_get(stats, "std"))
+    return pd.DataFrame(data) if data else pd.DataFrame(columns=["time_s"])
+
+
+def full_trace_table(mass_data: MassDataset) -> pd.DataFrame:
+    """The whole run at full resolution: time, mass and any other channel."""
+    cols: dict[str, Any] = {
+        "time_s": mass_data.time,
+        "mass_ng_cm2": mass_data.mass,
+        "frequency_hz": mass_data.frequency,
+    }
+    if mass_data.temperature is not None:
+        cols["temperature_c"] = mass_data.temperature
+    return pd.DataFrame(cols)
+
+
+def _record_columns(step: str, model_id: str, rec: Any) -> dict[str, float]:  # noqa: ANN401
+    items = (
+        rec.items() if isinstance(rec, Mapping)
+        else ((f.name, getattr(rec, f.name)) for f in dataclasses.fields(rec))
+    )
+    out: dict[str, float] = {}
+    for name, value in items:
+        if name in _RECORD_SKIP or isinstance(value, bool):
+            continue
+        if value is not None and not isinstance(value, (int, float, np.number)):
+            continue
+        unit = _UNITS.get(name)
+        col = f"{step}_{short_model(model_id)}_"
+        col += unit if unit == "r2" else f"{name}_{unit}" if unit else name
+        out[col] = np.nan if value is None else float(value)
+    return out
+
+
+def fit_summary_table(
+    mass_data: MassDataset,
+    cycle_index: CycleIndex,
+    cycles: CycleCollection,
+    fits: Mapping[str, Mapping[str, Any]],
+    fits_per_cycle: Mapping[str, Mapping[str, list[Any]]],
+    labels: Mapping[str, Mapping[OccKey, str]],
+    gain: pd.DataFrame,
+) -> pd.DataFrame:
+    """One row per cycle with every single-number result, indexed by ``cycle``.
+
+    Columns are ``<step>_<model>_<parameter>_<unit>`` (``TMA_mono_k_per_s``),
+    plus R² and fit-loss RMSE per fit, pulse onset time, detection confidence
+    and excluded flag per step, and the mass gained in each cycle.
+    """
+    rows: dict[str, dict[str, float]] = {}
+
+    def row(label: str) -> dict[str, float]:
+        return rows.setdefault(label, {})
+
+    growth = cumulative_growth_table(gain)
+    by_outer = {int(r.outer_cycle): r for r in growth.itertuples()}
+    step_onsets = list(cycle_index.step_onsets)
+    conf = cycle_index.confidence
+    for step, lab in labels.items():
+        results = cycles.steps(name=step, include_excluded=True)
+        onsets = [mass_data.time[idx] for n, idx in step_onsets if n == step]
+        confs = (
+            [conf[i] for i, (n, _) in enumerate(step_onsets) if n == step]
+            if len(conf) == len(step_onsets) else []
         )
-    if not frames:
-        return pd.DataFrame(columns=FIT_LOSS_AVERAGE_COLUMNS)
-    return pd.concat(frames, ignore_index=True)[FIT_LOSS_AVERAGE_COLUMNS]
+        for i, sr in enumerate(results):
+            k = _key(sr)
+            if k not in lab:
+                continue
+            r = row(lab[k])
+            if len(onsets) == len(results):
+                r[f"{step}_pulse_onset_time_s"] = float(onsets[i])
+            if len(confs) == len(results):
+                r[f"{step}_pulse_confidence"] = float(confs[i])
+            r[f"{step}_excluded"] = 1.0 if sr.excluded else 0.0
+            r[f"{step}_mass_change_ng_cm2"] = float(sr.mass_change)
+        for model_id in fits_per_cycle.get(step, {}):
+            for rec in fits_per_cycle[step][model_id] or []:
+                k = _key(rec)
+                if k in lab:
+                    row(lab[k]).update(_record_columns(step, model_id, rec))
+    for step, model_id, res in iter_fit_loss(fits):
+        for tr in _get(res, "traces") or []:
+            k = _key(tr)
+            if k in labels.get(step, {}) and _get(tr, "rmse") is not None:
+                row(labels[step][k])[
+                    f"{step}_{short_model(model_id)}_fit_loss_rmse_ng_cm2"
+                ] = float(_get(tr, "rmse"))
+    for label, r in rows.items():
+        g = by_outer.get(_label_order(label)[0])
+        if g is not None:
+            r["mass_gain_ng_cm2"] = float(g.delta_ng_cm2)
+            r["cumulative_growth_ng_cm2"] = float(g.cumulative_ng_cm2)
+            r["cycle_start_time_s"] = float(g.t_start_s)
+            r["cycle_end_time_s"] = float(g.t_end_s)
+            r["cycle_partial"] = 1.0 if g.partial else 0.0
+    if not rows:
+        return pd.DataFrame(index=pd.Index([], name="cycle"))
+    df = pd.DataFrame.from_dict(rows, orient="index")
+    df = df.loc[sorted(df.index, key=_label_order)]
+    lead = [c for c in (
+        "mass_gain_ng_cm2", "cumulative_growth_ng_cm2", "cycle_start_time_s",
+        "cycle_end_time_s", "cycle_partial",
+    ) if c in df.columns]
+    df = df[lead + [c for c in df.columns if c not in lead]]
+    df.index.name = "cycle"
+    return df
+
+
+def write_fit_summary_xlsx(summary: pd.DataFrame, path: Any) -> None:  # noqa: ANN401
+    """fit_summary as a spreadsheet: readable headers, units in the row beneath.
+
+    Needs ``openpyxl`` (``pip install qcm-pak[xlsx]``).
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "writing fit_summary.xlsx needs openpyxl (pip install openpyxl)"
+        ) from exc
+
+    def split(col: str) -> tuple[str, str]:
+        if col.endswith("_r2"):
+            return col[:-3].replace("_", " ") + " R²", ""
+        for suffix, unit in _XLSX_UNITS:
+            if col.endswith(suffix):
+                return col[: -len(suffix)].replace("_", " "), unit
+        return col.replace("_", " "), ""
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "fit_summary"
+    heads = [("cycle", "")] + [split(c) for c in summary.columns]
+    ws.append([h for h, _ in heads])
+    ws.append([u for _, u in heads])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for label, vals in zip(summary.index, summary.itertuples(index=False)):
+        first = float(label) if "." not in str(label) else str(label)
+        ws.append([first] + [None if pd.isna(v) else float(v) for v in vals])
+    ws.freeze_panes = "B3"
+    wb.save(path)
 
 
 def plot_fit_loss(residuals: Any, step_name: str, model_id: str) -> Figure:  # noqa: ANN401
@@ -150,6 +365,16 @@ def plot_fit_loss(residuals: Any, step_name: str, model_id: str) -> Figure:  # n
     ax.set_title(f"{step_name} · {model_id} — fit loss")
     fig.tight_layout()
     return fig
+
+
+def cycle_mass_change_table(trace: pd.DataFrame) -> pd.DataFrame:
+    """Mass change within each cycle against time in the cycle, wide."""
+    series = [
+        (str(int(k)), g["time_in_cycle_s"].to_numpy(),
+         g["mass_change_in_cycle_ng_cm2"].to_numpy())
+        for k, g in trace.groupby("outer_cycle", sort=True)
+    ]
+    return wide_table(series)
 
 
 def _step_durations(index: CycleIndex) -> dict[str, float]:

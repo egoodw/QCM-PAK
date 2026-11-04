@@ -12,13 +12,20 @@ All notable changes to QCM-PAK are documented here.
   plus purge), or at the end of the data if that comes first.
 
 ### Added
-- `save_full_export` now writes fit-loss and mass-gain traces. Fit loss (fit
-  minus data, ng/cm²): `data/fit_loss_<step>_<model>.tsv` (outer_cycle,
-  sub_cycle_run, time_s, data, fitted, residual), `data/fit_loss_average.tsv`
-  and `figures/modelling/<step>_<model>_fit_loss.png`, for fits that carry
-  `residuals`. Mass gain: `data/mass_gain_traces.tsv` (mass change over time in
-  each cycle and cumulative growth), `data/cumulative_growth.tsv` and two
-  figures. Every file the export wrote before is still written.
+- `save_full_export` has a new, simpler layout. `README.txt` explains every
+  file. `figures/` is in numbered folders (`1_trace`, `2_pulse_detection`,
+  `3_mass_gain`, `4_monomodal`, `5_bimodal`). `data/raw/full_trace.csv` is the
+  full-resolution trace. `data/traces/` holds wide CSVs, one per step and
+  quantity (`<step>_mass`, `<step>_fit_<mono|bi>`, `<step>_fit_loss_<...>`;
+  fit loss is fit minus data, ng/cm2): column 1 is `time_s` from pulse onset,
+  the rest are cycle numbers from 1 (`7.2` for sub-cycles).
+  `data/fit_summary.csv` has one row per cycle with every per-cycle number
+  (fit parameters with units in the names, R2, fit-loss RMSE, onset time,
+  pulse confidence, excluded flag, mass gain, cumulative growth).
+  `xlsx=True` also writes `data/fit_summary.xlsx` (needs the new `xlsx`
+  extra). `cycle_batches` switches the `cycles_NNNN-NNNN` figures off; the
+  default is off for runs over 200 cycles. This replaces the per-step TSV
+  files; their content is in the files above.
 - Fit residual traces. `fit_langmuir` and `fit_etch` now set
   `result.residuals` (`FitResiduals`): for every occurrence of the step, the
   data (`|mass_corrected|`), the ensemble fitted curve and the residual

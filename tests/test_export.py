@@ -100,14 +100,14 @@ def test_save_full_export_writes_core_files(tmp_path) -> None:
     save_full_export(out, data, index, cycles, params, cycle_batch_size=3)
 
     assert (out / "analysis_report.txt").is_file()
-    assert (out / "figures" / "full_trace.png").is_file()
-    assert (out / "figures" / "derivative_analysis.png").is_file()
-    assert (out / "figures" / "detailed_cycles_first.png").is_file()
-    assert (out / "figures" / "detailed_cycles_middle.png").is_file()
-    assert (out / "figures" / "detailed_cycles_last.png").is_file()
-    assert (out / "data" / "cycle_data_A.tsv").is_file()
-    assert (out / "data" / "pulse_times_A.tsv").is_file()
-    assert (out / "data" / "pulse_confidence.tsv").is_file()
+    assert (out / "README.txt").is_file()
+    t = out / "figures" / "1_trace"
+    for name in ("full_trace", "derivative_analysis", "detailed_cycles_first",
+                 "detailed_cycles_middle", "detailed_cycles_last"):
+        assert (t / f"{name}.png").is_file(), name
+    assert (out / "data" / "raw" / "full_trace.csv").is_file()
+    assert (out / "data" / "traces" / "A_mass.csv").is_file()
+    assert (out / "data" / "fit_summary.csv").is_file()
 
 
 def test_save_full_export_batches_cycle_figures(tmp_path) -> None:
@@ -116,10 +116,10 @@ def test_save_full_export_batches_cycle_figures(tmp_path) -> None:
     save_full_export(out, data, index, cycles, params, cycle_batch_size=3)
 
     # 6 cycles / batch_size 3 -> two batches
-    assert (out / "figures" / "cycles_0001-0003" / "A_cycles.png").is_file()
-    assert (out / "figures" / "cycles_0001-0003" / "A_average.png").is_file()
-    assert (out / "figures" / "cycles_0001-0003" / "A_timing.png").is_file()
-    assert (out / "figures" / "cycles_0004-0006" / "B_cycles.png").is_file()
+    assert (out / "figures" / "2_pulse_detection" / "cycles_0001-0003" / "A_cycles.png").is_file()
+    assert (out / "figures" / "2_pulse_detection" / "cycles_0001-0003" / "A_average.png").is_file()
+    assert (out / "figures" / "2_pulse_detection" / "cycles_0001-0003" / "A_timing.png").is_file()
+    assert (out / "figures" / "2_pulse_detection" / "cycles_0004-0006" / "B_cycles.png").is_file()
 
 
 def test_save_full_export_with_fits_writes_modelling_figures_and_tsvs(tmp_path) -> None:
@@ -132,9 +132,8 @@ def test_save_full_export_with_fits_writes_modelling_figures_and_tsvs(tmp_path) 
     out = tmp_path / "output"
     save_full_export(out, data, index, cycles, params, fits, fits_per_cycle, cycle_batch_size=3)
 
-    assert (out / "figures" / "modelling" / "A_langmuir_mono.png").is_file()
-    assert (out / "figures" / "modelling" / "A_langmuir_mono_k_drift.png").is_file()
-    assert (out / "data" / "A_langmuir_mono_per_cycle.tsv").is_file()
+    assert (out / "figures" / "4_monomodal" / "A_langmuir_mono.png").is_file()
+    assert (out / "figures" / "4_monomodal" / "A_langmuir_mono_k_drift.png").is_file()
 
 
 def test_save_full_export_accepts_dataclass_fits_directly(tmp_path) -> None:
@@ -147,30 +146,25 @@ def test_save_full_export_accepts_dataclass_fits_directly(tmp_path) -> None:
 
     out = tmp_path / "output"
     save_full_export(out, data, index, cycles, params, fits, cycle_batch_size=3)
-    assert (out / "figures" / "modelling" / "A_langmuir_mono.png").is_file()
+    assert (out / "figures" / "4_monomodal" / "A_langmuir_mono.png").is_file()
 
 
-_OLD_ZIP_FILES = [
-    "analysis_report.txt",
-    "figures/full_trace.png",
-    "figures/derivative_analysis.png",
-    "figures/detailed_cycles_first.png",
-    "figures/detailed_cycles_middle.png",
-    "figures/detailed_cycles_last.png",
-    "figures/cycles_0001-0003/A_cycles.png",
-    "figures/cycles_0001-0003/A_average.png",
-    "figures/cycles_0001-0003/A_timing.png",
-    "figures/modelling/A_langmuir_mono.png",
-    "figures/modelling/A_langmuir_mono_k_drift.png",
-    "figures/modelling/A_langmuir_mono_theta_max_drift.png",
-    "data/cycle_data_A.tsv",
-    "data/pulse_times_A.tsv",
-    "data/pulse_confidence.tsv",
-    "data/A_langmuir_mono_per_cycle.tsv",
+_OLD_ZIP_FIGURES = [
+    "1_trace/full_trace.png",
+    "1_trace/derivative_analysis.png",
+    "1_trace/detailed_cycles_first.png",
+    "1_trace/detailed_cycles_middle.png",
+    "1_trace/detailed_cycles_last.png",
+    "2_pulse_detection/cycles_0001-0003/A_cycles.png",
+    "2_pulse_detection/cycles_0001-0003/A_average.png",
+    "2_pulse_detection/cycles_0001-0003/A_timing.png",
+    "4_monomodal/A_langmuir_mono.png",
+    "4_monomodal/A_langmuir_mono_k_drift.png",
+    "4_monomodal/A_langmuir_mono_theta_max_drift.png",
 ]
 
 
-def _export_with_traces(tmp_path, as_dicts: bool):
+def _export(tmp_path, as_dicts: bool = False, **kwargs):
     import pandas as pd
 
     data, params, index, cycles = _built_pipeline(tmp_path, n_cycles=6)
@@ -184,54 +178,101 @@ def _export_with_traces(tmp_path, as_dicts: bool):
     fits_per_cycle = {"A": {"langmuir_mono": [_fit_dict(r) for r in per_cycle]}}
     out = tmp_path / "output"
     save_full_export(out, data, index, cycles, params, fits, fits_per_cycle,
-                     cycle_batch_size=3)
+                     cycle_batch_size=3, **kwargs)
     return out, result, pd
 
 
+def _csv(pd, path):
+    return pd.read_csv(path, encoding="utf-8-sig")
+
+
 @pytest.mark.parametrize("as_dicts", [False, True])
-def test_export_keeps_old_files_and_adds_fit_loss_traces(tmp_path, as_dicts) -> None:
-    out, result, pd = _export_with_traces(tmp_path, as_dicts)
-    for name in _OLD_ZIP_FILES:
-        assert (out / name).is_file(), name
+def test_export_keeps_old_figures_and_writes_wide_traces(tmp_path, as_dicts) -> None:
+    out, result, pd = _export(tmp_path, as_dicts)
+    for name in _OLD_ZIP_FIGURES:
+        assert (out / "figures" / name).is_file(), name
+    assert (out / "figures" / "4_monomodal" / "A_langmuir_mono_fit_loss.png").is_file()
 
-    loss = pd.read_csv(out / "data" / "fit_loss_A_langmuir_mono.tsv", sep="\t")
-    assert list(loss.columns) == [
-        "outer_cycle", "sub_cycle_run", "time_s", "data_ng_cm2",
-        "fitted_ng_cm2", "residual_fit_minus_data_ng_cm2",
-    ]
-    assert len(loss) == sum(len(t.time) for t in result.residuals.traces)
-    # fit minus data, the opposite sign of the library's data - fit
-    np.testing.assert_allclose(
-        loss["residual_fit_minus_data_ng_cm2"],
-        loss["fitted_ng_cm2"] - loss["data_ng_cm2"], atol=1e-4,
-    )
-    avg = pd.read_csv(out / "data" / "fit_loss_average.tsv", sep="\t")
+    traces = out / "data" / "traces"
+    cols = ["time_s", "1", "2", "3", "4", "5", "6"]
+    mass = _csv(pd, traces / "A_mass.csv")
+    assert list(mass.columns) == cols
+    assert mass["time_s"].iloc[0] == 0
+
+    fit = _csv(pd, traces / "A_fit_mono.csv")
+    loss = _csv(pd, traces / "A_fit_loss_mono.csv")
+    assert list(loss.columns) == list(fit.columns) == cols
+    # fit minus data: the opposite sign of the library's data - fit
+    first = result.residuals.traces[0]
+    n = len(first.time)
+    np.testing.assert_allclose(loss["1"].iloc[:n], -first.residual, atol=1e-4)
+    np.testing.assert_allclose(fit["1"].iloc[:n], first.fitted, atol=1e-4)
+    avg = _csv(pd, traces / "A_fit_loss_average.csv")
     assert list(avg.columns) == [
-        "step", "model", "time_s", "mean_fit_minus_data_ng_cm2",
-        "sd_ng_cm2", "n_traces",
+        "time_s", "mono_mean_fit_minus_data_ng_cm2", "mono_sd_ng_cm2",
     ]
-    assert set(avg["step"]) == {"A"}
-    assert (out / "figures" / "modelling" / "A_langmuir_mono_fit_loss.png").is_file()
 
 
-def test_export_writes_mass_gain_traces(tmp_path) -> None:
-    out, _, pd = _export_with_traces(tmp_path, as_dicts=False)
-    trace = pd.read_csv(out / "data" / "mass_gain_traces.tsv", sep="\t")
-    assert list(trace.columns) == [
-        "outer_cycle", "time_s", "time_in_cycle_s", "mass_ng_cm2",
-        "mass_change_in_cycle_ng_cm2", "cumulative_growth_ng_cm2", "partial",
-    ]
-    assert sorted(trace["outer_cycle"].unique()) == [1, 2, 3, 4, 5, 6]
-    growth = pd.read_csv(out / "data" / "cumulative_growth.tsv", sep="\t")
-    assert list(growth.columns) == [
-        "outer_cycle", "t_start_s", "t_end_s", "delta_ng_cm2",
-        "cumulative_ng_cm2", "partial",
-    ]
-    assert len(growth) == 6
+def test_export_full_trace_is_full_resolution(tmp_path) -> None:
+    out, _, pd = _export(tmp_path)
+    (tmp_path / "again").mkdir()
+    data, _, _, _ = _built_pipeline(tmp_path / "again", n_cycles=6)
+    raw = _csv(pd, out / "data" / "raw" / "full_trace.csv")
+    assert list(raw.columns)[:2] == ["time_s", "mass_ng_cm2"]
+    assert len(raw) == len(data.time)
+    np.testing.assert_allclose(raw["time_s"], data.time, atol=1e-6)
+
+
+def test_fit_summary_has_one_row_per_cycle_with_every_scalar(tmp_path) -> None:
+    out, _, pd = _export(tmp_path)
+    s = _csv(pd, out / "data" / "fit_summary.csv")
+    assert s.columns[0] == "cycle" and list(s["cycle"]) == [1, 2, 3, 4, 5, 6]
+    for col in ("A_mono_k_per_s", "A_mono_theta_max_ng_cm2", "A_mono_r2",
+                "A_mono_fit_loss_rmse_ng_cm2", "A_pulse_onset_time_s",
+                "A_pulse_confidence", "A_excluded", "A_mass_change_ng_cm2",
+                "mass_gain_ng_cm2", "cumulative_growth_ng_cm2"):
+        assert col in s.columns, col
     # the synthetic run adds 3 ng/cm² a cycle (A + B, 1.5 each)
-    np.testing.assert_allclose(growth["delta_ng_cm2"].iloc[:5], 3.0, atol=0.2)
+    np.testing.assert_allclose(s["mass_gain_ng_cm2"].iloc[:5], 3.0, atol=0.2)
     np.testing.assert_allclose(
-        growth["cumulative_ng_cm2"], growth["delta_ng_cm2"].cumsum(), atol=1e-6
+        s["cumulative_growth_ng_cm2"], s["mass_gain_ng_cm2"].cumsum(), atol=1e-6
     )
-    assert (out / "figures" / "mass_change_per_cycle.png").is_file()
-    assert (out / "figures" / "cumulative_growth.png").is_file()
+    assert s["A_mono_k_per_s"].notna().all()
+    assert (s["A_excluded"] == 0).all()
+
+
+def test_mass_gain_figures_and_cycle_trace(tmp_path) -> None:
+    out, _, pd = _export(tmp_path)
+    for name in ("mass_change_per_cycle", "cumulative_growth"):
+        assert (out / "figures" / "3_mass_gain" / f"{name}.png").is_file()
+    t = _csv(pd, out / "data" / "traces" / "cycle_mass_change.csv")
+    assert list(t.columns) == ["time_s", "1", "2", "3", "4", "5", "6"]
+
+
+def test_batch_figures_can_be_switched_off(tmp_path) -> None:
+    data, params, index, cycles = _built_pipeline(tmp_path, n_cycles=6)
+    out = tmp_path / "off"
+    save_full_export(out, data, index, cycles, params, cycle_batches=False)
+    assert not (out / "figures" / "2_pulse_detection").exists()
+
+
+def test_xlsx_has_readable_headers_and_a_units_row(tmp_path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    out, _, _ = _export(tmp_path, xlsx=True)
+    ws = openpyxl.load_workbook(out / "data" / "fit_summary.xlsx").active
+    heads = [c.value for c in ws[1]]
+    units = [c.value for c in ws[2]]
+    assert heads[0] == "cycle"
+    assert units[heads.index("A mono k")] == "1/s"
+    assert ws.cell(row=3, column=1).value == 1
+    assert ws.max_row == 8  # headers, units, six cycles
+
+
+def test_wide_table_orders_dotted_labels_and_pads_short_cycles() -> None:
+    from qcm_pak.export_traces import wide_table
+
+    t = np.array([0.0, 1.0, 2.0])
+    df = wide_table([("7.2", t, t * 2), ("7.1", t, t)])
+    assert list(df.columns) == ["time_s", "7.1", "7.2"]
+    short = wide_table([("1", t, t), ("2", t[:2], t[:2])])
+    assert np.isnan(short["2"].iloc[2])

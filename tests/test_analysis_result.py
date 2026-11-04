@@ -87,13 +87,19 @@ def test_to_bytes_writes_nothing_to_disk(
     assert list(workdir.iterdir()) == []
 
 
-def test_full_export_tsvs_match_to_bytes(tmp_path: Path) -> None:
-    # save_full_export writes the same per-step TSVs through its own path;
-    # the two must not drift apart.
+def test_full_export_traces_match_to_bytes_grid(tmp_path: Path) -> None:
+    # save_full_export writes the same per-step data as wide CSVs; the time
+    # grid and cycle count must agree with to_bytes().
+    import io
+
+    import pandas as pd
+
     r = _analysis(tmp_path)
     save_full_export(tmp_path / "full", r.mass_data, r.cycle_index, r.cycles,
                      r.params, cycle_batch_size=2)
     files = r.to_bytes()
     for step in ("TMA", "H2O"):
-        name = f"data/cycle_data_{step}.tsv"
-        assert (tmp_path / "full" / name).read_bytes() == files[name]
+        old = pd.read_csv(io.BytesIO(files[f"data/cycle_data_{step}.tsv"]), sep="	")
+        new = pd.read_csv(tmp_path / "full" / "data" / "traces" / f"{step}_mass.csv")
+        assert len(new) == len(old)
+        assert new.shape[1] == old.shape[1]
