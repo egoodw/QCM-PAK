@@ -12,6 +12,13 @@ All notable changes to QCM-PAK are documented here.
   plus purge), or at the end of the data if that comes first.
 
 ### Added
+- `save_full_export` now writes fit-loss and mass-gain traces. Fit loss (fit
+  minus data, ng/cm²): `data/fit_loss_<step>_<model>.tsv` (outer_cycle,
+  sub_cycle_run, time_s, data, fitted, residual), `data/fit_loss_average.tsv`
+  and `figures/modelling/<step>_<model>_fit_loss.png`, for fits that carry
+  `residuals`. Mass gain: `data/mass_gain_traces.tsv` (mass change over time in
+  each cycle and cumulative growth), `data/cumulative_growth.tsv` and two
+  figures. Every file the export wrote before is still written.
 - Fit residual traces. `fit_langmuir` and `fit_etch` now set
   `result.residuals` (`FitResiduals`): for every occurrence of the step, the
   data (`|mass_corrected|`), the ensemble fitted curve and the residual

@@ -148,3 +148,90 @@ def test_save_full_export_accepts_dataclass_fits_directly(tmp_path) -> None:
     out = tmp_path / "output"
     save_full_export(out, data, index, cycles, params, fits, cycle_batch_size=3)
     assert (out / "figures" / "modelling" / "A_langmuir_mono.png").is_file()
+
+
+_OLD_ZIP_FILES = [
+    "analysis_report.txt",
+    "figures/full_trace.png",
+    "figures/derivative_analysis.png",
+    "figures/detailed_cycles_first.png",
+    "figures/detailed_cycles_middle.png",
+    "figures/detailed_cycles_last.png",
+    "figures/cycles_0001-0003/A_cycles.png",
+    "figures/cycles_0001-0003/A_average.png",
+    "figures/cycles_0001-0003/A_timing.png",
+    "figures/modelling/A_langmuir_mono.png",
+    "figures/modelling/A_langmuir_mono_k_drift.png",
+    "figures/modelling/A_langmuir_mono_theta_max_drift.png",
+    "data/cycle_data_A.tsv",
+    "data/pulse_times_A.tsv",
+    "data/pulse_confidence.tsv",
+    "data/A_langmuir_mono_per_cycle.tsv",
+]
+
+
+def _export_with_traces(tmp_path, as_dicts: bool):
+    import pandas as pd
+
+    data, params, index, cycles = _built_pipeline(tmp_path, n_cycles=6)
+    result = fit_langmuir(cycles, "A", model="mono")
+    per_cycle = fit_langmuir_per_cycle(cycles, "A", model="mono")
+    assert result.residuals is not None
+    fit = _fit_dict(result)
+    if as_dicts:  # what the web API passes: JSON-safe dicts
+        fit["residuals"] = result.residuals.to_dict()
+    fits = {"A": {"langmuir_mono": fit}}
+    fits_per_cycle = {"A": {"langmuir_mono": [_fit_dict(r) for r in per_cycle]}}
+    out = tmp_path / "output"
+    save_full_export(out, data, index, cycles, params, fits, fits_per_cycle,
+                     cycle_batch_size=3)
+    return out, result, pd
+
+
+@pytest.mark.parametrize("as_dicts", [False, True])
+def test_export_keeps_old_files_and_adds_fit_loss_traces(tmp_path, as_dicts) -> None:
+    out, result, pd = _export_with_traces(tmp_path, as_dicts)
+    for name in _OLD_ZIP_FILES:
+        assert (out / name).is_file(), name
+
+    loss = pd.read_csv(out / "data" / "fit_loss_A_langmuir_mono.tsv", sep="\t")
+    assert list(loss.columns) == [
+        "outer_cycle", "sub_cycle_run", "time_s", "data_ng_cm2",
+        "fitted_ng_cm2", "residual_fit_minus_data_ng_cm2",
+    ]
+    assert len(loss) == sum(len(t.time) for t in result.residuals.traces)
+    # fit minus data, the opposite sign of the library's data - fit
+    np.testing.assert_allclose(
+        loss["residual_fit_minus_data_ng_cm2"],
+        loss["fitted_ng_cm2"] - loss["data_ng_cm2"], atol=1e-4,
+    )
+    avg = pd.read_csv(out / "data" / "fit_loss_average.tsv", sep="\t")
+    assert list(avg.columns) == [
+        "step", "model", "time_s", "mean_fit_minus_data_ng_cm2",
+        "sd_ng_cm2", "n_traces",
+    ]
+    assert set(avg["step"]) == {"A"}
+    assert (out / "figures" / "modelling" / "A_langmuir_mono_fit_loss.png").is_file()
+
+
+def test_export_writes_mass_gain_traces(tmp_path) -> None:
+    out, _, pd = _export_with_traces(tmp_path, as_dicts=False)
+    trace = pd.read_csv(out / "data" / "mass_gain_traces.tsv", sep="\t")
+    assert list(trace.columns) == [
+        "outer_cycle", "time_s", "time_in_cycle_s", "mass_ng_cm2",
+        "mass_change_in_cycle_ng_cm2", "cumulative_growth_ng_cm2", "partial",
+    ]
+    assert sorted(trace["outer_cycle"].unique()) == [1, 2, 3, 4, 5, 6]
+    growth = pd.read_csv(out / "data" / "cumulative_growth.tsv", sep="\t")
+    assert list(growth.columns) == [
+        "outer_cycle", "t_start_s", "t_end_s", "delta_ng_cm2",
+        "cumulative_ng_cm2", "partial",
+    ]
+    assert len(growth) == 6
+    # the synthetic run adds 3 ng/cm² a cycle (A + B, 1.5 each)
+    np.testing.assert_allclose(growth["delta_ng_cm2"].iloc[:5], 3.0, atol=0.2)
+    np.testing.assert_allclose(
+        growth["cumulative_ng_cm2"], growth["delta_ng_cm2"].cumsum(), atol=1e-6
+    )
+    assert (out / "figures" / "mass_change_per_cycle.png").is_file()
+    assert (out / "figures" / "cumulative_growth.png").is_file()

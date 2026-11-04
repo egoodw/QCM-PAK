@@ -126,7 +126,11 @@ def save_full_export(
     adds: detailed first/middle/last-cycle zoom plots, cycle-batched
     overlay/average/timing figures, per-model fit plots and per-cycle drift
     plots, pulse-time and pulse-confidence TSVs, per-cycle fit-parameter
-    TSVs, and a text report.
+    TSVs, a text report, fit-loss traces (``data/fit_loss_<step>_<model>.tsv``,
+    ``data/fit_loss_average.tsv`` and ``*_fit_loss.png``; fit minus data) and
+    mass-gain traces (``data/mass_gain_traces.tsv``,
+    ``data/cumulative_growth.tsv`` and two figures). Fit-loss files need fits
+    that carry ``residuals``.
 
     ``fits``/``fits_per_cycle`` accept either the native
     ``LangmuirResult``/``EtchResult`` dataclasses or plain JSON-safe dicts
@@ -151,6 +155,7 @@ def save_full_export(
     """
     import pandas as pd
 
+    from qcm_pak import export_traces as traces
     from qcm_pak import visualization as viz
 
     fits = fits or {}
@@ -289,3 +294,35 @@ def save_full_export(
         for i, (name, idx) in enumerate(cycle_index.step_onsets)
     ]
     pd.DataFrame(rows).to_csv(data_dir / "pulse_confidence.tsv", sep="\t", index=False)
+
+    # ── Fit-loss traces: fit minus data, per step and model ──────────────
+    for step_name, model_id, res in traces.iter_fit_loss(fits):
+        traces.fit_loss_table(res).to_csv(
+            data_dir / f"fit_loss_{step_name}_{model_id}.tsv", sep="	", index=False
+        )
+        try:
+            fig = traces.plot_fit_loss(res, step_name, model_id)
+            (fig_dir / "modelling").mkdir(parents=True, exist_ok=True)
+            fig.savefig(
+                fig_dir / "modelling" / f"{step_name}_{model_id}_fit_loss.png",
+                dpi=150, bbox_inches="tight",
+            )
+        except Exception:
+            pass  # one degenerate trace set shouldn't abort the export
+    average = traces.fit_loss_average_table(fits)
+    if not average.empty:
+        average.to_csv(data_dir / "fit_loss_average.tsv", sep="	", index=False)
+
+    # ── Mass-gain traces: per-cycle mass change and cumulative growth ────
+    gain = traces.mass_gain_table(mass_data, cycle_index, cycles)
+    if not gain.empty:
+        gain.to_csv(data_dir / "mass_gain_traces.tsv", sep="	", index=False)
+        traces.cumulative_growth_table(gain).to_csv(
+            data_dir / "cumulative_growth.tsv", sep="	", index=False
+        )
+        fig = traces.plot_mass_change_per_cycle(gain)
+        fig.savefig(
+            fig_dir / "mass_change_per_cycle.png", dpi=150, bbox_inches="tight"
+        )
+        fig = traces.plot_cumulative_growth(gain)
+        fig.savefig(fig_dir / "cumulative_growth.png", dpi=150, bbox_inches="tight")
