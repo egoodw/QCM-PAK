@@ -5,6 +5,12 @@ All notable changes to QCM-PAK are documented here.
 ## [Unreleased]
 
 ### Fixed
+- Residual statistics (`aggregate_traces`, used by every ensemble fit's
+  residuals and `summarize_residuals`) no longer build a grid with one point
+  per smallest time gap. A time axis with one near-zero gap (for example
+  repeated clock stamps separated by 1 µs) asked for tens of millions of points
+  per step and used more than 8 GB. The grid is now capped at 5000 points
+  (`residuals.MAX_GRID_POINTS`), and the per-point σ is computed vectorised.
 - The last step of a run is no longer extracted to the end of the data. It had
   no next onset, so a log that kept recording after the recipe ended gave it a
   window hours long (for example 144,570 s), which stretched any plot that

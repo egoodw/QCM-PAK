@@ -9,6 +9,7 @@ from qcm_pak._types import Cycle, CycleCollection, StepResult, SubCycleRun
 from qcm_pak.kinetics import fit_etch, fit_langmuir, fit_langmuir_per_cycle
 from qcm_pak.recipe import PulseStep, Recipe, SubCycle
 from qcm_pak.residuals import (
+    MAX_GRID_POINTS,
     ResidualTrace,
     aggregate_traces,
     collect_residuals,
@@ -171,6 +172,21 @@ def test_aggregate_uses_finest_grid_and_stored_residuals() -> None:
     assert st.std[0] == pytest.approx(np.sqrt(2.0))
     assert st.std[-1] is None
     assert st.mean[-1] == pytest.approx(1.0)
+
+
+def test_aggregate_grid_is_capped_when_a_time_gap_is_tiny() -> None:
+    """A 1 µs gap in one trace must not make a 40 s grid of 40 million points."""
+
+    def tr(t: np.ndarray, val: float) -> ResidualTrace:
+        r = np.full_like(t, val)
+        return ResidualTrace(0, 0, 0, 0, t, r, np.zeros_like(t), r, abs(val))
+
+    t = np.concatenate([[0.0, 1e-6], np.linspace(0.05, 40.0, 200)])
+    st = aggregate_traces([tr(t, 1.0), tr(np.linspace(0.0, 40.0, 100), 3.0)])
+    assert len(st.time) <= MAX_GRID_POINTS
+    assert st.time[-1] == pytest.approx(40.0, rel=1e-3)
+    assert st.mean[0] == pytest.approx(2.0)
+    assert len(st.mean) == len(st.std) == len(st.n) == len(st.time)
 
 
 def test_summarize_accepts_results_and_serialises() -> None:
