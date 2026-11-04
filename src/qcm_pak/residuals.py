@@ -42,6 +42,9 @@ from numpy.typing import NDArray
 
 from qcm_pak.serialization import dataclass_to_dict
 
+#: Most points the common residual grid may have (see :func:`aggregate_traces`).
+MAX_GRID_POINTS = 5000
+
 if TYPE_CHECKING:
     from qcm_pak._types import CycleCollection, EtchResult, LangmuirResult, StepResult
 
@@ -312,8 +315,11 @@ def aggregate_traces(traces: list[ResidualTrace]) -> ResidualStats:
 
     No refitting: the ``residual`` arrays are used as stored. The grid runs
     from 0 to the longest trace in steps of the finest sampling interval among
-    the traces; each trace is linearly interpolated onto it and counts only
-    where it has data (no truncation to the shortest trace).
+    the traces, but never more than ``MAX_GRID_POINTS`` points: a log whose
+    time axis has a near-zero gap (repeated clock stamps nudged apart by
+    microseconds, say) would otherwise ask for tens of millions of points.
+    Each trace is linearly interpolated onto the grid and counts only where
+    it has data (no truncation to the shortest trace).
 
     Raises
     ------
@@ -328,6 +334,8 @@ def aggregate_traces(traces: list[ResidualTrace]) -> ResidualStats:
     if not dt > 0:
         raise ValueError("Residual trace time axes must be strictly increasing.")
     t_end = max(float(tr.time[-1] - tr.time[0]) for tr in traces)
+    if t_end / dt + 1.0 > MAX_GRID_POINTS:
+        dt = t_end / (MAX_GRID_POINTS - 1)
     n_pts = int(np.floor(t_end / dt + 1e-9)) + 1
     grid = np.arange(n_pts, dtype=np.float64) * dt
 
@@ -344,13 +352,10 @@ def aggregate_traces(traces: list[ResidualTrace]) -> ResidualStats:
         count[have] += 1
 
     mean = total / count
-    std: list[float | None] = []
-    for i in range(n_pts):
-        if count[i] < 2:
-            std.append(None)
-        else:
-            var = (total_sq[i] - count[i] * mean[i] ** 2) / (count[i] - 1)
-            std.append(float(np.sqrt(max(var, 0.0))))
+    enough = count >= 2
+    var = (total_sq - count * mean**2) / np.where(enough, count - 1, 1)
+    sd = np.sqrt(np.maximum(var, 0.0))
+    std: list[float | None] = [float(v) if ok else None for v, ok in zip(sd, enough)]
     return ResidualStats(time=grid, mean=mean, std=std, n=count)
 
 
