@@ -12,8 +12,15 @@ All notable changes to QCM-PAK are documented here.
   plus purge), or at the end of the data if that comes first.
 
 ### Changed
+- Cumulative growth is split per precursor. `fit_summary.csv` has
+  `cumulative_growth_total_ng_cm2` (renamed from `cumulative_growth_ng_cm2`)
+  and one `cumulative_growth_<step>_ng_cm2` column per recipe step; the figure
+  draws the total and each step.
+- All per-cycle plots (`detailed_cycles_*`, `cycles_NNNN-NNNN/` batches) are
+  in `figures/2_cycles/`, so `figures/` stays short.
+- README.txt gains "How to read fit loss" and a column glossary.
 - `save_full_export` writes one tree and no TSV. Figures are in numbered
-  folders under `figures/` (`1_trace`, `2_pulse_detection`, `3_mass_gain`,
+  folders under `figures/` (`1_trace`, `2_cycles`, `3_mass_gain`,
   `4_monomodal`, `5_bimodal`, `6_etch`). Numbers are CSV: `data/raw/full_trace.csv`;
   wide traces in `data/traces/` (time_s, then one column per cycle:
   `<step>_mass`, `<step>_fit_<model>`, `<step>_fit_loss_<model>` as fit minus

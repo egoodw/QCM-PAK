@@ -241,6 +241,9 @@ def mass_gain_table(
     return pd.concat(frames, ignore_index=True)[columns]
 
 
+TOTAL_GROWTH = "cumulative_growth_total_ng_cm2"
+
+
 def cycle_growth_table(gain: pd.DataFrame) -> pd.DataFrame:
     """One row per cycle (index ``cycle``): start, growth and running total."""
     rows = {}
@@ -249,9 +252,31 @@ def cycle_growth_table(gain: pd.DataFrame) -> pd.DataFrame:
             "cycle_t_start_s": g["time_s"].iloc[0],
             "cycle_partial": g["partial"].iloc[0] == "yes",
             "mass_gain_ng_cm2": g["mass_change_in_cycle_ng_cm2"].iloc[-1],
-            "cumulative_growth_ng_cm2": g["cumulative_growth_ng_cm2"].iloc[-1],
+            TOTAL_GROWTH: g["cumulative_growth_ng_cm2"].iloc[-1],
         }
     return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def step_growth_table(
+    cycles: CycleCollection, step_names: Sequence[str], n_cycles: int
+) -> pd.DataFrame:
+    """Running total of each step's mass change, one column per step.
+
+    Index ``cycle`` (1-based). A step that runs twice in a cycle adds both
+    runs. A cycle without a (usable) occurrence adds nothing. The columns
+    are named ``cumulative_growth_<step>_ng_cm2``.
+    """
+    table = pd.DataFrame(index=pd.RangeIndex(1, n_cycles + 1, name="cycle"))
+    for step in step_names:
+        per_cycle = pd.Series(0.0, index=table.index)
+        for sr in cycles.steps(name=step, include_excluded=True):
+            if sr.excluded or sr.mass_change is None:
+                continue
+            value = float(sr.mass_change)
+            if np.isfinite(value) and sr.outer_cycle + 1 in per_cycle.index:
+                per_cycle[sr.outer_cycle + 1] += value
+        table[f"cumulative_growth_{step}_ng_cm2"] = per_cycle.cumsum()
+    return table
 
 
 def cycle_mass_change_table(gain: pd.DataFrame) -> pd.DataFrame:
@@ -286,7 +311,9 @@ def fit_summary_table(
 ) -> pd.DataFrame:
     """One row per cycle (index ``cycle``, 1-based) with every per-cycle number.
 
-    Columns: cycle start, mass gain and cumulative growth; per step the pulse
+    Columns: cycle start, mass gain, ``cumulative_growth_total_ng_cm2`` (the
+    measured mass since the recipe start) and ``cumulative_growth_<step>_ng_cm2``
+    (the running sum of that step's own mass change); per step the pulse
     onset, confidence, excluded flag and mass change of its occurrence in the
     cycle; per fitted model the per-cycle parameters, ``r2`` and the RMSE of
     that occurrence's fit loss. A step that runs again within a cycle gets a
@@ -302,6 +329,9 @@ def fit_summary_table(
     if not gain.empty:
         for col, ser in cycle_growth_table(gain).items():
             new[str(col)] = ser.to_dict()
+    steps_growth = step_growth_table(cycles, index.recipe.step_names(), n_cycles)
+    for col, ser in steps_growth.items():
+        new[str(col)] = ser.to_dict()
 
     time = np.asarray(mass_data.time, dtype=float)
     ordinals: dict[str, list[int]] = {}
