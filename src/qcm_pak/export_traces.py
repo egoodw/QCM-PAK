@@ -82,15 +82,25 @@ def plot_mass_change_per_cycle(trace: pd.DataFrame) -> Figure:
     return fig
 
 
-def plot_cumulative_growth(trace: pd.DataFrame) -> Figure:
-    """Mass relative to the recipe start over the whole run."""
+def plot_cumulative_growth(growth: pd.DataFrame) -> Figure:
+    """Growth built up cycle by cycle: the total and each step's own share.
+
+    ``growth`` has one row per cycle (index ``cycle``) and columns
+    ``cumulative_growth_total_ng_cm2`` and ``cumulative_growth_<step>_ng_cm2``.
+    """
     fig = Figure(figsize=(7, 4))
     ax = fig.subplots()
-    ax.plot(
-        trace["time_s"], trace["cumulative_growth_ng_cm2"], color="steelblue", lw=1
-    )
-    ax.set_xlabel("Time (s)")
+    prefix, suffix = "cumulative_growth_", "_ng_cm2"
+    for col in growth.columns:
+        name = col[len(prefix):-len(suffix)]
+        if name == "total":
+            ax.plot(growth.index, growth[col], color="black", lw=2, label="total")
+        else:
+            ax.plot(growth.index, growth[col], lw=1.2, label=name)
+    ax.axhline(0, color="0.6", lw=0.6)
+    ax.set_xlabel("Cycle")
     ax.set_ylabel("Growth since start (ng/cm²)")
-    ax.set_title("Growth over the run")
+    ax.set_title("Growth over the run: total and per step")
+    ax.legend(frameon=False)
     fig.tight_layout()
     return fig
